@@ -28,3 +28,13 @@ Thumbs.db
 
 # Large/reproducible generated data
 data/dr_training_expanded.csv
+
+# Local pipeline backups / rejected experiment artifacts
+data/historical_recovery_pre_pipeline_fix.csv
+models/s_learner_candidate_method_history.joblib
+models/s_learner_corrected_baseline.joblib
+models/s_learner_method_history.joblib
+models/s_learner_pre_pipeline_fix.joblib
+
+# Local environment test file
+test_localsystem.txt

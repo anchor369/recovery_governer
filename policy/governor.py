@@ -37,6 +37,11 @@ class GovernorDecision:
     chosen_action: RecoveryAction
     scores: tuple[ScoredRecoveryAction, ...]
 
+@dataclass(frozen=True)
+class ActionPolicyCheck:
+    allowed: bool
+    reason: str | None = None
+
 
 class RecoveryGovernor:
     """
@@ -193,32 +198,53 @@ class RecoveryGovernor:
             ),
         )
 
-    def _is_allowed(
+    def check_action_policy(
         self,
         state: RecoveryDecisionState,
         action: RecoveryAction,
-    ) -> bool:
-        """Apply deterministic payment and merchant policy constraints."""
+    ) -> ActionPolicyCheck:
 
         if (
             action.action_type
             == ActionType.NO_ACTION
         ):
-            return True
+            return ActionPolicyCheck(
+                allowed=True,
+            )
 
         if (
             state.attempt_count
             >= self.max_payment_attempts
         ):
-            return False
+            return ActionPolicyCheck(
+                allowed=False,
+                reason=(
+                    "MAX_PAYMENT_ATTEMPTS_REACHED"
+                ),
+            )
 
         if (
             action.action_type
             == ActionType.NUDGE
         ):
-            return (
-                state.contact_consent
-                and not state.customer_active
+            if not state.contact_consent:
+                return ActionPolicyCheck(
+                    allowed=False,
+                    reason=(
+                        "CONTACT_CONSENT_MISSING"
+                    ),
+                )
+
+            if state.customer_active:
+                return ActionPolicyCheck(
+                    allowed=False,
+                    reason=(
+                        "CUSTOMER_STILL_ACTIVE"
+                    ),
+                )
+
+            return ActionPolicyCheck(
+                allowed=True,
             )
 
         if (
@@ -229,11 +255,24 @@ class RecoveryGovernor:
                 action.target_method
             )
 
+            if target is None:
+                return ActionPolicyCheck(
+                    allowed=False,
+                    reason=(
+                        "TARGET_METHOD_MISSING"
+                    ),
+                )
+
             if (
-                target is None
-                or target == state.current_method
+                target
+                == state.current_method
             ):
-                return False
+                return ActionPolicyCheck(
+                    allowed=False,
+                    reason=(
+                        "TARGET_EQUALS_CURRENT_METHOD"
+                    ),
+                )
 
             availability = {
                 PaymentMethod.UPI:
@@ -249,9 +288,17 @@ class RecoveryGovernor:
                     state.available_netbanking,
             }
 
-            return availability[
-                target
-            ]
+            if not availability[target]:
+                return ActionPolicyCheck(
+                    allowed=False,
+                    reason=(
+                        "TARGET_METHOD_UNAVAILABLE"
+                    ),
+                )
+
+            return ActionPolicyCheck(
+                allowed=True,
+            )
 
         if (
             action.action_type
@@ -261,15 +308,48 @@ class RecoveryGovernor:
                 action.discount_percent
             )
 
-            return (
-                discount is not None
-                and discount > 0.0
-                and discount
-                <= self.economics
+            if (
+                discount is None
+                or discount <= 0.0
+            ):
+                return ActionPolicyCheck(
+                    allowed=False,
+                    reason=(
+                        "INVALID_DISCOUNT"
+                    ),
+                )
+
+            if (
+                discount
+                > self.economics
                 .merchant_offer_cap_percent
+            ):
+                return ActionPolicyCheck(
+                    allowed=False,
+                    reason=(
+                        "MERCHANT_OFFER_CAP_EXCEEDED"
+                    ),
+                )
+
+            return ActionPolicyCheck(
+                allowed=True,
             )
 
-        return False
+        return ActionPolicyCheck(
+            allowed=False,
+            reason="UNKNOWN_ACTION_TYPE",
+        )
+
+    def _is_allowed(
+        self,
+        state: RecoveryDecisionState,
+        action: RecoveryAction,
+    ) -> bool:
+
+        return self.check_action_policy(
+            state=state,
+            action=action,
+        ).allowed
 
     @staticmethod
     def _state_frame(

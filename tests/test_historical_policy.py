@@ -29,6 +29,22 @@ def build_state(
         prior_debit_card_count=1,
         prior_netbanking_count=0,
 
+        prior_upi_attempt_count=0,
+        prior_upi_success_count=0,
+        prior_upi_success_rate=0.0,
+
+        prior_credit_card_attempt_count=0,
+        prior_credit_card_success_count=0,
+        prior_credit_card_success_rate=0.0,
+
+        prior_debit_card_attempt_count=0,
+        prior_debit_card_success_count=0,
+        prior_debit_card_success_rate=0.0,
+
+        prior_netbanking_attempt_count=0,
+        prior_netbanking_success_count=0,
+        prior_netbanking_success_rate=0.0,
+
         available_upi=True,
         available_credit_card=True,
         available_debit_card=True,

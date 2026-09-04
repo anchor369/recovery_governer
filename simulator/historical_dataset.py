@@ -87,14 +87,6 @@ class HistoricalDatasetGenerator:
             )
         )
 
-        self.state_builder = RecoveryDecisionStateBuilder(
-            random_source=random_source,
-            method_selector=PaymentMethodSelector(
-                config=config,
-                random_source=random_source,
-            ),
-        )
-
         self.decision_counter = 0
 
     def generate_rows(
@@ -279,6 +271,42 @@ class HistoricalDatasetGenerator:
 
             "prior_netbanking_count":
                 state.prior_netbanking_count,
+
+            "prior_upi_attempt_count":
+                state.prior_upi_attempt_count,
+
+            "prior_upi_success_count":
+                state.prior_upi_success_count,
+
+            "prior_upi_success_rate":
+                state.prior_upi_success_rate,
+
+            "prior_credit_card_attempt_count":
+                state.prior_credit_card_attempt_count,
+
+            "prior_credit_card_success_count":
+                state.prior_credit_card_success_count,
+
+            "prior_credit_card_success_rate":
+                state.prior_credit_card_success_rate,
+
+            "prior_debit_card_attempt_count":
+                state.prior_debit_card_attempt_count,
+
+            "prior_debit_card_success_count":
+                state.prior_debit_card_success_count,
+
+            "prior_debit_card_success_rate":
+                state.prior_debit_card_success_rate,
+
+            "prior_netbanking_attempt_count":
+                state.prior_netbanking_attempt_count,
+
+            "prior_netbanking_success_count":
+                state.prior_netbanking_success_count,
+
+            "prior_netbanking_success_rate":
+                state.prior_netbanking_success_rate,
 
             "available_upi":
                 int(state.available_upi),

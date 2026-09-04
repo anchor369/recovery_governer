@@ -12,6 +12,10 @@ from sklearn.compose import ColumnTransformer
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder
+from ml.action_features import (
+    CANDIDATE_METHOD_HISTORY_FEATURES,
+    add_candidate_method_history_features,
+)
 
 from ml.features import (
     CATEGORICAL_FEATURES,
@@ -51,17 +55,59 @@ ALL_MODEL_FEATURES = (
 class PooledSLearner:
     """Estimate P(recovery | observable state, candidate action)."""
 
-    def __init__(self):
+    def __init__(
+            self,
+            extra_numeric_features=None,
+            use_candidate_method_history=False
+        ):
+        self.extra_numeric_features = list(
+            extra_numeric_features or []
+        )
+        self.use_candidate_method_history = (
+            use_candidate_method_history
+        )
         self.model = self._build_model()
 
-    @staticmethod
-    def _build_model():
+    def _all_numeric_features(self):
+        extra_features = getattr(
+            self,
+            "extra_numeric_features",
+            [],
+        )
+
+        use_candidate_history = getattr(
+            self,
+            "use_candidate_method_history",
+            False,
+        )
+
+        candidate_features = []
+
+        if use_candidate_history:
+            candidate_features = (
+                CANDIDATE_METHOD_HISTORY_FEATURES
+            )
+
+        return (
+            NUMERIC_FEATURES
+            + extra_features
+            + candidate_features
+            + ACTION_NUMERIC_FEATURES
+        )
+
+
+    def _all_model_features(self):
+        return (
+            self._all_numeric_features()
+            + ALL_CATEGORICAL_FEATURES
+        )
+    def _build_model(self):
         preprocessing = ColumnTransformer(
             transformers=[
                 (
                     "numeric",
                     "passthrough",
-                    ALL_NUMERIC_FEATURES,
+                    self._all_numeric_features(),
                 ),
                 (
                     "categorical",
@@ -109,7 +155,7 @@ class PooledSLearner:
 
         self.model.fit(
             prepared[
-                ALL_MODEL_FEATURES
+                self._all_model_features()
             ],
             prepared["recovered"],
         )
@@ -128,7 +174,7 @@ class PooledSLearner:
 
         return self.model.predict_proba(
             prepared[
-                ALL_MODEL_FEATURES
+                self._all_model_features()
             ]
         )[:, 1]
 
@@ -168,9 +214,8 @@ class PooledSLearner:
         return self.predict_probability(
             counterfactual
         )
-
-    @staticmethod
     def _prepare_dataframe(
+        self,
         dataframe: pd.DataFrame,
     ) -> pd.DataFrame:
         """Normalize action payload fields read from CSV."""
@@ -198,7 +243,18 @@ class PooledSLearner:
             )
             .fillna(0.0)
         )
+        use_candidate_history = getattr(
+            self,
+            "use_candidate_method_history",
+            False,
+        )
 
+        if use_candidate_history:
+            prepared = (
+                add_candidate_method_history_features(
+                    prepared
+                )
+            )
         return prepared
 
     @staticmethod

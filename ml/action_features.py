@@ -23,6 +23,56 @@ METHOD_AVAILABILITY_COLUMNS = {
     "NETBANKING": "available_netbanking",
 }
 
+METHOD_ATTEMPT_COUNT_COLUMNS = {
+    "UPI":
+        "prior_upi_attempt_count",
+
+    "CREDIT_CARD":
+        "prior_credit_card_attempt_count",
+
+    "DEBIT_CARD":
+        "prior_debit_card_attempt_count",
+
+    "NETBANKING":
+        "prior_netbanking_attempt_count",
+}
+
+
+METHOD_SUCCESS_COUNT_COLUMNS = {
+    "UPI":
+        "prior_upi_success_count",
+
+    "CREDIT_CARD":
+        "prior_credit_card_success_count",
+
+    "DEBIT_CARD":
+        "prior_debit_card_success_count",
+
+    "NETBANKING":
+        "prior_netbanking_success_count",
+}
+
+
+METHOD_SUCCESS_RATE_COLUMNS = {
+    "UPI":
+        "prior_upi_success_rate",
+
+    "CREDIT_CARD":
+        "prior_credit_card_success_rate",
+
+    "DEBIT_CARD":
+        "prior_debit_card_success_rate",
+
+    "NETBANKING":
+        "prior_netbanking_success_rate",
+}
+
+CANDIDATE_METHOD_HISTORY_FEATURES = [
+    "target_method_attempt_count",
+    "target_method_success_count",
+    "target_method_success_rate",
+]
+
 
 def add_candidate_features(
     dataframe: pd.DataFrame,
@@ -122,5 +172,93 @@ def add_candidate_features(
     result[
         "target_available"
     ] = target_available_values
+
+    return result
+
+def add_candidate_method_history_features(
+    dataframe: pd.DataFrame,
+) -> pd.DataFrame:
+
+    result = dataframe.copy()
+
+    attempt_counts = []
+    success_counts = []
+    success_rates = []
+
+    for _, row in result.iterrows():
+
+        target_method = row.get(
+            "target_method",
+            "NONE",
+        )
+
+        if pd.isna(target_method):
+            target_method = "NONE"
+
+        target_method = str(
+            target_method
+        )
+
+        attempt_column = (
+            METHOD_ATTEMPT_COUNT_COLUMNS.get(
+                target_method
+            )
+        )
+
+        success_column = (
+            METHOD_SUCCESS_COUNT_COLUMNS.get(
+                target_method
+            )
+        )
+
+        rate_column = (
+            METHOD_SUCCESS_RATE_COLUMNS.get(
+                target_method
+            )
+        )
+
+        if attempt_column is None:
+
+            attempt_count = 0.0
+            success_count = 0.0
+            success_rate = 0.0
+
+        else:
+
+            attempt_count = float(
+                row[attempt_column]
+            )
+
+            success_count = float(
+                row[success_column]
+            )
+
+            success_rate = float(
+                row[rate_column]
+            )
+
+        attempt_counts.append(
+            attempt_count
+        )
+
+        success_counts.append(
+            success_count
+        )
+
+        success_rates.append(
+            success_rate
+        )
+
+    result[
+        "target_method_attempt_count"
+    ] = attempt_counts
+
+    result[
+        "target_method_success_count"
+    ] = success_counts
+
+    result[
+        "target_method_success_rate"
+    ] = success_rates
 
     return result

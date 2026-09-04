@@ -28,6 +28,23 @@ NUMERIC_FEATURES = [
     "customer_active",
 ]
 
+METHOD_HISTORY_NUMERIC_FEATURES = [
+    "prior_upi_attempt_count",
+    "prior_upi_success_count",
+    "prior_upi_success_rate",
+
+    "prior_credit_card_attempt_count",
+    "prior_credit_card_success_count",
+    "prior_credit_card_success_rate",
+
+    "prior_debit_card_attempt_count",
+    "prior_debit_card_success_count",
+    "prior_debit_card_success_rate",
+
+    "prior_netbanking_attempt_count",
+    "prior_netbanking_success_count",
+    "prior_netbanking_success_rate",
+]
 
 CATEGORICAL_FEATURES = [
     "current_method",

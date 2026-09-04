@@ -15,6 +15,8 @@ from simulator.models import (
 from simulator.random_source import RandomSource
 from simulator.method_selector import PaymentMethodSelector
 
+from statistics import median
+
 
 class RecoveryDecisionStateBuilder:
     """Creates the observable state available at recovery decision time."""
@@ -38,6 +40,14 @@ class RecoveryDecisionStateBuilder:
             current_journey.payment_attempts[-1]
         )
 
+        decision_time = current_attempt.attempted_at
+
+        known_prior_journeys = [
+            journey
+            for journey in prior_journeys
+            if journey.created_at < decision_time
+        ]
+
         if current_attempt.status != PaymentStatus.FAILED:
             raise ValueError(
                 "Recovery decision state requires a confirmed failure."
@@ -50,17 +60,23 @@ class RecoveryDecisionStateBuilder:
         )
 
         prior_checkout_count = len(
-            prior_journeys
+            known_prior_journeys
         )
 
         prior_success_count = sum(
-            self._journey_paid(journey)
-            for journey in prior_journeys
+            self._journey_paid_before(
+                journey,
+                decision_time,
+            )
+            for journey in known_prior_journeys
         )
 
-        prior_failure_count = (
-            prior_checkout_count
-            - prior_success_count
+        prior_failure_count = sum(
+            self._journey_failed_before(
+                journey,
+                decision_time,
+            )
+            for journey in known_prior_journeys
         )
 
         if prior_checkout_count == 0:
@@ -78,7 +94,7 @@ class RecoveryDecisionStateBuilder:
             PaymentMethod.NETBANKING: 0,
         }
 
-        for journey in prior_journeys:
+        for journey in known_prior_journeys:
 
             if not journey.payment_attempts:
                 continue
@@ -89,20 +105,20 @@ class RecoveryDecisionStateBuilder:
 
             method_counts[method] += 1
 
-        amount_ratio = (
-            current_journey.amount_minor
-            / customer.typical_order_value_minor
+        method_history = self._build_method_history(
+            prior_journeys=known_prior_journeys,
+            decision_time=decision_time,
+        )
+
+        amount_ratio = self._observable_amount_ratio(
+            current_amount_minor=current_journey.amount_minor,
+            prior_journeys=known_prior_journeys,
         )
 
         customer_active = (
             self._sample_customer_activity(
                 customer=customer,
                 journey=current_journey,
-            )
-        )
-        available_methods = (
-            self.method_selector.get_available_methods(
-                customer
             )
         )
 
@@ -149,6 +165,78 @@ class RecoveryDecisionStateBuilder:
                 method_counts[
                     PaymentMethod.NETBANKING
                 ]
+            ),
+
+            prior_upi_attempt_count=(
+                method_history[
+                    PaymentMethod.UPI
+                ]["attempt_count"]
+            ),
+
+            prior_upi_success_count=(
+                method_history[
+                    PaymentMethod.UPI
+                ]["success_count"]
+            ),
+
+            prior_upi_success_rate=(
+                method_history[
+                    PaymentMethod.UPI
+                ]["success_rate"]
+            ),
+
+            prior_credit_card_attempt_count=(
+                method_history[
+                    PaymentMethod.CREDIT_CARD
+                ]["attempt_count"]
+            ),
+
+            prior_credit_card_success_count=(
+                method_history[
+                    PaymentMethod.CREDIT_CARD
+                ]["success_count"]
+            ),
+
+            prior_credit_card_success_rate=(
+                method_history[
+                    PaymentMethod.CREDIT_CARD
+                ]["success_rate"]
+            ),
+
+            prior_debit_card_attempt_count=(
+                method_history[
+                    PaymentMethod.DEBIT_CARD
+                ]["attempt_count"]
+            ),
+
+            prior_debit_card_success_count=(
+                method_history[
+                    PaymentMethod.DEBIT_CARD
+                ]["success_count"]
+            ),
+
+            prior_debit_card_success_rate=(
+                method_history[
+                    PaymentMethod.DEBIT_CARD
+                ]["success_rate"]
+            ),
+
+            prior_netbanking_attempt_count=(
+                method_history[
+                    PaymentMethod.NETBANKING
+                ]["attempt_count"]
+            ),
+
+            prior_netbanking_success_count=(
+                method_history[
+                    PaymentMethod.NETBANKING
+                ]["success_count"]
+            ),
+
+            prior_netbanking_success_rate=(
+                method_history[
+                    PaymentMethod.NETBANKING
+                ]["success_rate"]
             ),
 
             available_upi=(
@@ -203,15 +291,111 @@ class RecoveryDecisionStateBuilder:
         )
 
     @staticmethod
-    def _journey_paid(
+    def _known_attempts_before(
         journey: HistoricalJourney,
+        decision_time,
+    ):
+        return [
+            attempt
+            for attempt in journey.payment_attempts
+            if attempt.attempted_at < decision_time
+        ]
+
+
+    @classmethod
+    def _build_method_history(
+        cls,
+        prior_journeys: list[HistoricalJourney],
+        decision_time,
+    ):
+        method_history = {
+            method: {
+                "attempt_count": 0,
+                "resolved_count": 0,
+                "success_count": 0,
+                "success_rate": 0.0,
+            }
+            for method in PaymentMethod
+        }
+
+        for journey in prior_journeys:
+
+            known_attempts = cls._known_attempts_before(
+                journey,
+                decision_time,
+            )
+
+            for attempt in known_attempts:
+
+                stats = method_history[
+                    attempt.method
+                ]
+
+                stats["attempt_count"] += 1
+
+                if attempt.status in (
+                    PaymentStatus.CAPTURED,
+                    PaymentStatus.FAILED,
+                ):
+                    stats["resolved_count"] += 1
+
+                if (
+                    attempt.status
+                    == PaymentStatus.CAPTURED
+                ):
+                    stats["success_count"] += 1
+
+        for stats in method_history.values():
+
+            if stats["resolved_count"] > 0:
+                stats["success_rate"] = (
+                    stats["success_count"]
+                    / stats["resolved_count"]
+                )
+
+        return method_history
+
+    @classmethod
+    def _journey_paid_before(
+        cls,
+        journey: HistoricalJourney,
+        decision_time,
     ) -> bool:
 
+        known_attempts = cls._known_attempts_before(
+            journey,
+            decision_time,
+        )
+
         return any(
-            attempt.status
-            == PaymentStatus.CAPTURED
-            for attempt
-            in journey.payment_attempts
+            attempt.status == PaymentStatus.CAPTURED
+            for attempt in known_attempts
+        )
+
+    @classmethod
+    def _journey_failed_before(
+        cls,
+        journey: HistoricalJourney,
+        decision_time,
+    ) -> bool:
+
+        known_attempts = cls._known_attempts_before(
+            journey,
+            decision_time,
+        )
+
+        if not known_attempts:
+            return False
+
+        if any(
+            attempt.status == PaymentStatus.CAPTURED
+            for attempt in known_attempts
+        ):
+            return False
+
+        return (
+            known_attempts[-1].status
+            == PaymentStatus.FAILED
         )
 
     def _sample_customer_activity(
@@ -244,4 +428,30 @@ class RecoveryDecisionStateBuilder:
 
         return self.random.bernoulli(
             activity_probability
+        )
+
+    @staticmethod
+    def _observable_amount_ratio(
+        current_amount_minor: int,
+        prior_journeys: list[HistoricalJourney],
+    ) -> float:
+
+        if not prior_journeys:
+            return 1.0
+
+        prior_amounts = [
+            journey.amount_minor
+            for journey in prior_journeys
+        ]
+
+        historical_median = median(
+            prior_amounts
+        )
+
+        if historical_median <= 0:
+            return 1.0
+
+        return (
+            current_amount_minor
+            / historical_median
         )

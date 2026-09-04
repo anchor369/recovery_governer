@@ -70,3 +70,34 @@ def test_recovered_is_binary():
             0,
             1,
         }
+
+def test_method_history_features_are_present_and_valid():
+    rows = generate_small_dataset()
+
+    method_names = [
+        "upi",
+        "credit_card",
+        "debit_card",
+        "netbanking",
+    ]
+
+    for row in rows:
+        for method in method_names:
+            attempt_count = row[
+                f"prior_{method}_attempt_count"
+            ]
+
+            success_count = row[
+                f"prior_{method}_success_count"
+            ]
+
+            success_rate = row[
+                f"prior_{method}_success_rate"
+            ]
+
+            assert attempt_count >= 0
+            assert success_count >= 0
+
+            assert success_count <= attempt_count
+
+            assert 0.0 <= success_rate <= 1.0

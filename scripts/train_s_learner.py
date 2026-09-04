@@ -11,16 +11,47 @@ from sklearn.metrics import (
 from sklearn.model_selection import GroupShuffleSplit
 
 from ml.s_learner import PooledSLearner
+import argparse
+from ml.features import (
+    METHOD_HISTORY_NUMERIC_FEATURES,
+)
 
+parser = argparse.ArgumentParser()
+
+feature_group = (
+    parser.add_mutually_exclusive_group()
+)
+
+feature_group.add_argument(
+    "--method-history",
+    action="store_true",
+)
+
+feature_group.add_argument(
+    "--candidate-method-history",
+    action="store_true",
+)
+
+args = parser.parse_args()
 
 DATA_PATH = Path(
     "data/historical_recovery.csv"
 )
 
-MODEL_PATH = Path(
-    "models/s_learner.joblib"
-)
+if args.method_history:
+    MODEL_PATH = Path(
+        "models/s_learner_method_history.joblib"
+    )
 
+elif args.candidate_method_history:
+    MODEL_PATH = Path(
+        "models/s_learner_candidate_method_history.joblib"
+    )
+
+else:
+    MODEL_PATH = Path(
+        "models/s_learner_corrected_baseline.joblib"
+    )
 
 data = pd.read_csv(
     DATA_PATH
@@ -53,10 +84,6 @@ test_data = (
 )
 
 
-print()
-print("POOLED S-LEARNER TRAINING")
-print("-------------------------")
-
 print(
     "Training rows:",
     len(train_data),
@@ -78,12 +105,44 @@ print(
 )
 
 
-learner = PooledSLearner()
+
+if args.method_history:
+    learner = PooledSLearner(
+        extra_numeric_features=(
+            METHOD_HISTORY_NUMERIC_FEATURES
+        )
+    )
+
+    model_name = (
+        "S-LEARNER + METHOD HISTORY"
+    )
+
+
+elif args.candidate_method_history:
+    learner = PooledSLearner(
+        use_candidate_method_history=True
+    )
+
+    model_name = (
+        "S-LEARNER + CANDIDATE METHOD HISTORY"
+    )
+
+
+else:
+    learner = PooledSLearner()
+
+    model_name = (
+        "S-LEARNER CORRECTED BASELINE"
+    )
+
+
+print()
+print(model_name)
+print("-------------------------")
 
 learner.fit(
     train_data
 )
-
 
 print()
 print("OVERALL FACTUAL PERFORMANCE")

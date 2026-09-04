@@ -54,6 +54,22 @@ def build_state(
         prior_debit_card_count=1,
         prior_netbanking_count=0,
 
+        prior_upi_attempt_count=0,
+        prior_upi_success_count=0,
+        prior_upi_success_rate=0.0,
+
+        prior_credit_card_attempt_count=0,
+        prior_credit_card_success_count=0,
+        prior_credit_card_success_rate=0.0,
+
+        prior_debit_card_attempt_count=0,
+        prior_debit_card_success_count=0,
+        prior_debit_card_success_rate=0.0,
+
+        prior_netbanking_attempt_count=0,
+        prior_netbanking_success_count=0,
+        prior_netbanking_success_rate=0.0,
+
         available_upi=True,
         available_credit_card=True,
         available_debit_card=True,
@@ -193,4 +209,71 @@ def test_governor_blocks_nudge_without_consent():
     assert (
         decision.chosen_action.action_type
         == ActionType.NO_ACTION
+    )
+
+def test_policy_check_explains_missing_consent():
+    state = build_state()
+    state.contact_consent = False
+
+    learner = StubLearner(
+        {
+            "NO_ACTION": 0.60,
+            "NUDGE": 0.70,
+        }
+    )
+
+    governor = RecoveryGovernor(
+        learner=learner,
+        economics=MerchantEconomics(),
+    )
+
+    action = RecoveryAction(
+        action_type=ActionType.NUDGE,
+    )
+
+    check = governor.check_action_policy(
+        state=state,
+        action=action,
+    )
+
+    assert check.allowed is False
+
+    assert (
+        check.reason
+        == "CONTACT_CONSENT_MISSING"
+    )
+
+def test_policy_check_explains_offer_cap():
+    state = build_state()
+
+    learner = StubLearner(
+        {
+            "NO_ACTION": 0.60,
+        }
+    )
+
+    governor = RecoveryGovernor(
+        learner=learner,
+        economics=MerchantEconomics(
+            merchant_offer_cap_percent=5.0
+        ),
+    )
+
+    action = RecoveryAction(
+        action_type=(
+            ActionType.APPROVED_OFFER
+        ),
+        discount_percent=10.0,
+    )
+
+    check = governor.check_action_policy(
+        state=state,
+        action=action,
+    )
+
+    assert check.allowed is False
+
+    assert (
+        check.reason
+        == "MERCHANT_OFFER_CAP_EXCEEDED"
     )

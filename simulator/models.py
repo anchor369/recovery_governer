@@ -102,6 +102,22 @@ class SyntheticCustomer:
     bank_accounts: list[BankAccount] = field(default_factory=list)
     credit_cards: list[CreditCard] = field(default_factory=list)
 
+@dataclass
+class PaymentAttempt:
+    payment_id: str
+    attempt_number: int
+
+    method: PaymentMethod
+    attempted_at: datetime
+
+    status: PaymentStatus = PaymentStatus.CREATED
+
+    failure_category: FailureCategory | None = None
+    failure_detail: str | None = None
+    failure_source: str | None = None
+    failure_step: str | None = None
+
+    observed_rail_health: float | None = None
 
 @dataclass
 class HistoricalJourney:
@@ -125,22 +141,6 @@ class HistoricalJourney:
     naturally_recovered: bool = False
     abandoned: bool = False
 
-@dataclass
-class PaymentAttempt:
-    payment_id: str
-    attempt_number: int
-
-    method: PaymentMethod
-    attempted_at: datetime
-
-    status: PaymentStatus = PaymentStatus.CREATED
-
-    failure_category: FailureCategory | None = None
-    failure_detail: str | None = None
-    failure_source: str | None = None
-    failure_step: str | None = None
-
-    observed_rail_health: float | None = None
 
 
 @dataclass
@@ -156,6 +156,22 @@ class RecoveryDecisionState:
     prior_credit_card_count: int
     prior_debit_card_count: int
     prior_netbanking_count: int
+
+    prior_upi_attempt_count: int
+    prior_upi_success_count: int
+    prior_upi_success_rate: float
+
+    prior_credit_card_attempt_count: int
+    prior_credit_card_success_count: int
+    prior_credit_card_success_rate: float
+
+    prior_debit_card_attempt_count: int
+    prior_debit_card_success_count: int
+    prior_debit_card_success_rate: float
+
+    prior_netbanking_attempt_count: int
+    prior_netbanking_success_count: int
+    prior_netbanking_success_rate: float
 
     available_upi: bool
     available_credit_card: bool
@@ -173,5 +189,3 @@ class RecoveryDecisionState:
 
     contact_consent: bool
     customer_active: bool
-
-    available_upi: bool
