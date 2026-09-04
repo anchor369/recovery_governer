@@ -13,12 +13,12 @@ from backend.services.payment_truth import (
     evaluate_order_truth,
 )
 
-from backend.services.recovery_audit import (
-    action_label,
-)
-
 from simulator.models import (
     ActionType,
+)
+
+from simulator.action_codec import (
+    action_to_label,
 )
 
 
@@ -36,7 +36,7 @@ def create_pending_recovery_action(
         + uuid.uuid4().hex[:12]
     )
 
-    label = action_label(
+    label = action_to_label(
         chosen_action
     )
 

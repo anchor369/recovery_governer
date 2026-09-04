@@ -18,12 +18,15 @@ from simulator.intervention_engine import InterventionEngine
 from simulator.journey_processor import JourneyProcessor
 from simulator.method_selector import PaymentMethodSelector
 from simulator.models import (
-    ActionType,
     PaymentStatus,
-    RecoveryAction,
 )
 from simulator.random_source import RandomSource
-
+from simulator.action_codec import (
+    action_to_label,
+)
+from simulator.state_codec import (
+    decision_state_to_model_row,
+)
 
 class HistoricalDatasetGenerator:
     """Generate biased observational treatment data for ML training."""
@@ -231,122 +234,38 @@ class HistoricalDatasetGenerator:
             observed_result.payment_attempts[-1]
         )
 
-        
+        state_features = (
+            decision_state_to_model_row(
+                state
+            )
+        )
 
         return {
-            # Metadata: retain for audit/splitting, not model features.
+            # Metadata used for audit / splitting.
             "decision_id": (
                 f"D{self.decision_counter:07d}"
             ),
-            "customer_id": customer.customer_id,
-            "order_id": journey.order_id,
+
+            "customer_id":
+                customer.customer_id,
+
+            "order_id":
+                journey.order_id,
+
             "prediction_time": (
-                first_attempt.attempted_at.isoformat()
+                first_attempt
+                .attempted_at
+                .isoformat()
             ),
 
-            # Observable pre-treatment features.
-            "customer_tenure_days":
-                state.customer_tenure_days,
-
-            "prior_checkout_count":
-                state.prior_checkout_count,
-
-            "prior_success_count":
-                state.prior_success_count,
-
-            "prior_failure_count":
-                state.prior_failure_count,
-
-            "prior_success_rate":
-                state.prior_success_rate,
-
-            "prior_upi_count":
-                state.prior_upi_count,
-
-            "prior_credit_card_count":
-                state.prior_credit_card_count,
-
-            "prior_debit_card_count":
-                state.prior_debit_card_count,
-
-            "prior_netbanking_count":
-                state.prior_netbanking_count,
-
-            "prior_upi_attempt_count":
-                state.prior_upi_attempt_count,
-
-            "prior_upi_success_count":
-                state.prior_upi_success_count,
-
-            "prior_upi_success_rate":
-                state.prior_upi_success_rate,
-
-            "prior_credit_card_attempt_count":
-                state.prior_credit_card_attempt_count,
-
-            "prior_credit_card_success_count":
-                state.prior_credit_card_success_count,
-
-            "prior_credit_card_success_rate":
-                state.prior_credit_card_success_rate,
-
-            "prior_debit_card_attempt_count":
-                state.prior_debit_card_attempt_count,
-
-            "prior_debit_card_success_count":
-                state.prior_debit_card_success_count,
-
-            "prior_debit_card_success_rate":
-                state.prior_debit_card_success_rate,
-
-            "prior_netbanking_attempt_count":
-                state.prior_netbanking_attempt_count,
-
-            "prior_netbanking_success_count":
-                state.prior_netbanking_success_count,
-
-            "prior_netbanking_success_rate":
-                state.prior_netbanking_success_rate,
-
-            "available_upi":
-                int(state.available_upi),
-
-            "available_credit_card":
-                int(state.available_credit_card),
-
-            "available_debit_card":
-                int(state.available_debit_card),
-
-            "available_netbanking":
-                int(state.available_netbanking),
-
-            "current_amount_minor":
-                state.current_amount_minor,
-
-            "amount_ratio":
-                state.amount_ratio,
-
-            "current_method":
-                state.current_method.value,
-
-            "failure_category":
-                state.failure_category.value,
-
-            "attempt_count":
-                state.attempt_count,
-
-            "observed_rail_health":
-                state.observed_rail_health,
-
-            "contact_consent":
-                int(state.contact_consent),
-
-            "customer_active":
-                int(state.customer_active),
+            # Canonical observable model state.
+            **state_features,
 
             # Historical treatment.
             "treatment":
-                self._action_label(action),
+                action_to_label(
+                    action
+                ),
 
             "action_type":
                 action.action_type.value,
@@ -374,39 +293,10 @@ class HistoricalDatasetGenerator:
 
             "final_attempt_count":
                 len(
-                    observed_result.payment_attempts
+                    observed_result
+                    .payment_attempts
                 ),
 
             "final_payment_status":
                 final_attempt.status.value,
         }
-
-    @staticmethod
-    def _action_label(
-        action: RecoveryAction,
-    ) -> str:
-        """Create one unique treatment label."""
-
-        if (
-            action.action_type
-            == ActionType.SWITCH_METHOD
-        ):
-            return (
-                "SWITCH_"
-                + action.target_method.value
-            )
-
-        if (
-            action.action_type
-            == ActionType.APPROVED_OFFER
-        ):
-            return (
-                "OFFER_"
-                + str(
-                    int(
-                        action.discount_percent
-                    )
-                )
-            )
-
-        return action.action_type.value

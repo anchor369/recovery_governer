@@ -5,46 +5,17 @@ from backend.data_access.recovery import (
     create_recovery_decision_audit_bundle,
 )
 
+from simulator.action_codec import (
+    action_to_label,
+)
+
 from simulator.models import (
     ActionType,
 )
 
-
 DEFAULT_MODEL_VERSION = (
     "s_learner_corrected_v1"
 )
-
-
-def action_label(action):
-    """
-    Convert a RecoveryAction into the canonical label
-    stored in the database.
-    """
-
-    if (
-        action.action_type
-        == ActionType.SWITCH_METHOD
-    ):
-        return (
-            "SWITCH_"
-            + action.target_method.value
-        )
-
-    if (
-        action.action_type
-        == ActionType.APPROVED_OFFER
-    ):
-        return (
-            "OFFER_"
-            + str(
-                int(
-                    action.discount_percent
-                )
-            )
-        )
-
-    return action.action_type.value
-
 
 def build_feature_snapshot(state):
     """
@@ -93,7 +64,7 @@ def persist_operational_decision(
         .governor_decision
     )
 
-    chosen_label = action_label(
+    chosen_label = action_to_label(
         governor_decision.chosen_action
     )
 
@@ -134,7 +105,7 @@ def persist_operational_decision(
     }
 
     score_by_label = {
-        action_label(
+        action_to_label(
             score.action
         ): score
 
@@ -158,7 +129,7 @@ def persist_operational_decision(
     for action in (
         operational_decision.candidates
     ):
-        label = action_label(
+        label = action_to_label(
             action
         )
 

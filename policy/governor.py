@@ -21,6 +21,10 @@ from simulator.models import (
     RecoveryDecisionState,
 )
 
+from simulator.action_codec import (
+    action_to_label,
+)
+
 
 @dataclass(frozen=True)
 class ScoredRecoveryAction:
@@ -104,7 +108,7 @@ class RecoveryGovernor:
         for action in eligible_actions:
 
             treatment = (
-                self._action_label(
+                action_to_label(
                     action
                 )
             )
@@ -372,32 +376,3 @@ class RecoveryGovernor:
         return pd.DataFrame(
             [row]
         )
-
-    @staticmethod
-    def _action_label(
-        action: RecoveryAction,
-    ) -> str:
-
-        if (
-            action.action_type
-            == ActionType.SWITCH_METHOD
-        ):
-            return (
-                "SWITCH_"
-                + action.target_method.value
-            )
-
-        if (
-            action.action_type
-            == ActionType.APPROVED_OFFER
-        ):
-            return (
-                "OFFER_"
-                + str(
-                    int(
-                        action.discount_percent
-                    )
-                )
-            )
-
-        return action.action_type.value

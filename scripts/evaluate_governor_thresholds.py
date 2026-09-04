@@ -38,10 +38,11 @@ from simulator.method_selector import PaymentMethodSelector
 from simulator.models import (
     ActionType,
     PaymentStatus,
-    RecoveryAction,
 )
 from simulator.random_source import RandomSource
-
+from simulator.action_codec import (
+    action_to_label,
+)
 
 REFERENCE_TIME = datetime(
     2026,
@@ -122,37 +123,6 @@ governors = {
 # ---------------------------------------------------------
 # ACTION HELPERS
 # ---------------------------------------------------------
-
-def action_label(
-    action: RecoveryAction,
-) -> str:
-    """Convert RecoveryAction into the treatment label used by ML."""
-
-    if (
-        action.action_type
-        == ActionType.SWITCH_METHOD
-    ):
-        return (
-            "SWITCH_"
-            + action.target_method.value
-        )
-
-    if (
-        action.action_type
-        == ActionType.APPROVED_OFFER
-    ):
-        return (
-            "OFFER_"
-            + str(
-                int(
-                    action.discount_percent
-                )
-            )
-        )
-
-    return action.action_type.value
-
-
 def find_action(
     actions,
     action_type,
@@ -575,7 +545,7 @@ for state_index, (
 
     for action in eligible_actions:
 
-        label = action_label(
+        label = action_to_label(
             action
         )
 
@@ -602,7 +572,7 @@ for state_index, (
             "NO_ACTION missing from eligible actions."
         )
 
-    no_action_label = action_label(
+    no_action_label = action_to_label(
         no_action
     )
 
@@ -657,7 +627,7 @@ for state_index, (
 
     for action in eligible_actions:
 
-        label = action_label(
+        label = action_to_label(
             action
         )
 
@@ -680,7 +650,7 @@ for state_index, (
         eligible_actions,
         key=lambda action:
             true_action_values[
-                action_label(action)
+                action_to_label(action)
             ],
     )
 
@@ -714,7 +684,7 @@ for state_index, (
         action,
     ) in selected_actions.items():
 
-        label = action_label(
+        label = action_to_label(
             action
         )
 

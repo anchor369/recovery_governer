@@ -17,11 +17,15 @@ from simulator.intervention_engine import InterventionEngine
 from simulator.journey_processor import JourneyProcessor
 from simulator.method_selector import PaymentMethodSelector
 from simulator.models import (
-    ActionType,
     PaymentStatus,
 )
 from simulator.random_source import RandomSource
-
+from simulator.action_codec import (
+    action_to_label,
+)
+from simulator.state_codec import (
+    decision_state_to_model_row,
+)
 
 
 REFERENCE_TIME = datetime(
@@ -62,150 +66,6 @@ method_history_s_learner = joblib.load(
 candidate_method_s_learner = joblib.load(
     CANDIDATE_METHOD_S_MODEL_PATH
 )
-
-
-def action_label(action):
-    """
-    Convert RecoveryAction into the treatment label
-    understood by the ML model.
-    """
-
-    if (
-        action.action_type
-        == ActionType.SWITCH_METHOD
-    ):
-        return (
-            "SWITCH_"
-            + action.target_method.value
-        )
-
-    if (
-        action.action_type
-        == ActionType.APPROVED_OFFER
-    ):
-        return (
-            "OFFER_"
-            + str(
-                int(
-                    action.discount_percent
-                )
-            )
-        )
-
-    return action.action_type.value
-
-
-def state_to_row(state):
-    """
-    Convert observable RecoveryDecisionState
-    into one model-input row.
-    """
-
-    return {
-        "customer_tenure_days":
-            state.customer_tenure_days,
-
-        "prior_checkout_count":
-            state.prior_checkout_count,
-
-        "prior_success_count":
-            state.prior_success_count,
-
-        "prior_failure_count":
-            state.prior_failure_count,
-
-        "prior_success_rate":
-            state.prior_success_rate,
-
-        # Existing first-method history.
-        "prior_upi_count":
-            state.prior_upi_count,
-
-        "prior_credit_card_count":
-            state.prior_credit_card_count,
-
-        "prior_debit_card_count":
-            state.prior_debit_card_count,
-
-        "prior_netbanking_count":
-            state.prior_netbanking_count,
-
-        # New factual attempt-level history.
-        "prior_upi_attempt_count":
-            state.prior_upi_attempt_count,
-
-        "prior_upi_success_count":
-            state.prior_upi_success_count,
-
-        "prior_upi_success_rate":
-            state.prior_upi_success_rate,
-
-        "prior_credit_card_attempt_count":
-            state.prior_credit_card_attempt_count,
-
-        "prior_credit_card_success_count":
-            state.prior_credit_card_success_count,
-
-        "prior_credit_card_success_rate":
-            state.prior_credit_card_success_rate,
-
-        "prior_debit_card_attempt_count":
-            state.prior_debit_card_attempt_count,
-
-        "prior_debit_card_success_count":
-            state.prior_debit_card_success_count,
-
-        "prior_debit_card_success_rate":
-            state.prior_debit_card_success_rate,
-
-        "prior_netbanking_attempt_count":
-            state.prior_netbanking_attempt_count,
-
-        "prior_netbanking_success_count":
-            state.prior_netbanking_success_count,
-
-        "prior_netbanking_success_rate":
-            state.prior_netbanking_success_rate,
-
-        # Method availability.
-        "available_upi":
-            int(state.available_upi),
-
-        "available_credit_card":
-            int(state.available_credit_card),
-
-        "available_debit_card":
-            int(state.available_debit_card),
-
-        "available_netbanking":
-            int(state.available_netbanking),
-
-        # Current Order/payment state.
-        "current_amount_minor":
-            state.current_amount_minor,
-
-        "amount_ratio":
-            state.amount_ratio,
-
-        "current_method":
-            state.current_method.value,
-
-        "failure_category":
-            state.failure_category.value,
-
-        "attempt_count":
-            state.attempt_count,
-
-        "observed_rail_health":
-            state.observed_rail_health,
-
-        "contact_consent":
-            int(state.contact_consent),
-
-        "customer_active":
-            int(state.customer_active),
-    }
-
 
 def branch_recovered(
     customer,
@@ -525,7 +385,7 @@ for state_index, (
 
     row_frame = pd.DataFrame(
         [
-            state_to_row(
+            decision_state_to_model_row(
                 state
             )
         ]
@@ -542,7 +402,7 @@ for state_index, (
 
     for action in eligible_actions:
 
-        label = action_label(
+        label = action_to_label(
             action
         )
 

@@ -41,32 +41,9 @@ from simulator.models import (
     ActionType,
 )
 
-
-def action_label(action):
-    if (
-        action.action_type
-        == ActionType.SWITCH_METHOD
-    ):
-        return (
-            "SWITCH_"
-            + action.target_method.value
-        )
-
-    if (
-        action.action_type
-        == ActionType.APPROVED_OFFER
-    ):
-        return (
-            "OFFER_"
-            + str(
-                int(
-                    action.discount_percent
-                )
-            )
-        )
-
-    return action.action_type.value
-
+from simulator.action_codec import (
+    action_to_label,
+)
 
 def rupees(minor_value):
     return (
@@ -449,7 +426,7 @@ else:
     for score in (
         governor_decision.scores
     ):
-        label = action_label(
+        label = action_to_label(
             score.action
         )
 
@@ -494,7 +471,7 @@ else:
 
     print(
         "Chosen action:",
-        action_label(
+        action_to_label(
             chosen
         ),
     )
@@ -821,7 +798,7 @@ else:
         )
 
         print(
-            action_label(
+            action_to_label(
                 chosen
             )
         )

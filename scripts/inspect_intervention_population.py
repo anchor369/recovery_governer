@@ -14,7 +14,9 @@ from simulator.models import (
     RecoveryAction,
 )
 from simulator.random_source import RandomSource
-
+from simulator.action_codec import (
+    action_to_label,
+)
 
 REFERENCE_TIME = datetime(
     2026,
@@ -130,26 +132,34 @@ def branch_paid(
         for attempt in result.payment_attempts
     )
 
+def action_display_label(action):
+    """
+    Format canonical action labels for human-readable
+    simulator inspection output.
+    """
 
-def action_label(action):
-    if action.action_type == ActionType.SWITCH_METHOD:
-        return (
-            "SWITCH->"
-            + action.target_method.value
+    label = action_to_label(
+        action
+    )
+
+    if label.startswith(
+        "SWITCH_"
+    ):
+        return label.replace(
+            "SWITCH_",
+            "SWITCH->",
+            1,
         )
 
-    if (
-        action.action_type
-        == ActionType.APPROVED_OFFER
+    if label.startswith(
+        "OFFER_"
     ):
         return (
-            "OFFER_"
-            + str(int(action.discount_percent))
+            label
             + "%"
         )
 
-    return action.action_type.value
-
+    return label
 
 stats = defaultdict(
     lambda: {
@@ -217,7 +227,7 @@ for state_index, (
                 seed=branch_seed,
             )
 
-            label = action_label(action)
+            label = action_display_label(action)
 
             stats[label]["trials"] += 1
             stats[label]["successes"] += int(
