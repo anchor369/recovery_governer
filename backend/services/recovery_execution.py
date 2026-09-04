@@ -6,7 +6,7 @@ from datetime import (
 
 from backend.data_access.recovery import (
     create_recovery_action,
-    update_recovery_action_execution,
+    transition_pending_recovery_action,
 )
 
 from backend.services.payment_truth import (
@@ -99,6 +99,13 @@ def execute_recovery_action(
     if status == "NOT_REQUIRED":
         return action
 
+    if status in {"EXECUTED", "BLOCKED"}:
+        return {
+            **action,
+            "execution_result": "ALREADY_PROCESSED",
+            "transition_applied": False,
+        }
+
     if status != "PENDING":
         raise ValueError(
             "Only PENDING recovery actions "
@@ -113,57 +120,51 @@ def execute_recovery_action(
     # payment recovered after decision but
     # before execution.
     if truth == "PAID":
-        return (
-            update_recovery_action_execution(
-                action_id=(
-                    action["action_id"]
-                ),
-                execution_status=(
-                    "BLOCKED"
-                ),
-                blocked_reason=(
-                    "ORDER_ALREADY_PAID_"
-                    "BEFORE_EXECUTION"
-                ),
-                executed_at=None,
-            )
+        execution_status = "BLOCKED"
+        blocked_reason = (
+            "ORDER_ALREADY_PAID_"
+            "BEFORE_EXECUTION"
         )
+        executed_at = None
 
     # Never intervene when payment truth
     # itself is unresolved.
-    if truth == "UNCERTAIN":
-        return (
-            update_recovery_action_execution(
-                action_id=(
-                    action["action_id"]
-                ),
-                execution_status=(
-                    "BLOCKED"
-                ),
-                blocked_reason=(
-                    "PAYMENT_STATE_UNCERTAIN_"
-                    "BEFORE_EXECUTION"
-                ),
-                executed_at=None,
-            )
+    elif truth == "UNCERTAIN":
+        execution_status = "BLOCKED"
+        blocked_reason = (
+            "PAYMENT_STATE_UNCERTAIN_"
+            "BEFORE_EXECUTION"
         )
+        executed_at = None
 
     # In the buildathon demo this represents
     # successful hand-off to the appropriate
     # nudge / switch / offer execution channel.
-    return (
-        update_recovery_action_execution(
-            action_id=(
-                action["action_id"]
-            ),
-            execution_status=(
-                "EXECUTED"
-            ),
-            blocked_reason=None,
-            executed_at=(
-                datetime.now(
-                    timezone.utc
-                )
-            ),
+    else:
+        execution_status = "EXECUTED"
+        blocked_reason = None
+        executed_at = datetime.now(
+            timezone.utc
         )
+
+    transition = transition_pending_recovery_action(
+        action_id=action["action_id"],
+        execution_status=execution_status,
+        blocked_reason=blocked_reason,
+        executed_at=executed_at,
     )
+
+    if transition["transition_applied"]:
+        execution_result = (
+            "EXECUTED_NOW"
+            if execution_status == "EXECUTED"
+            else "BLOCKED_BY_PAYMENT_TRUTH"
+        )
+    else:
+        execution_result = "ALREADY_PROCESSED"
+
+    return {
+        **transition["action"],
+        "execution_result": execution_result,
+        "transition_applied": transition["transition_applied"],
+    }

@@ -435,7 +435,8 @@ def create_recovery_action(
 
             return cursor.fetchone()
 
-def update_recovery_action_execution(
+def _transition_pending_recovery_action(
+    cursor,
     action_id,
     execution_status,
     blocked_reason=None,
@@ -448,6 +449,7 @@ def update_recovery_action_execution(
             blocked_reason = %s,
             executed_at = %s
         WHERE action_id = %s
+          AND execution_status = 'PENDING'
         RETURNING
             action_id,
             decision_id,
@@ -466,16 +468,68 @@ def update_recovery_action_execution(
         action_id,
     )
 
+    cursor.execute(
+        query,
+        values,
+    )
+
+    return cursor.fetchone()
+
+
+def transition_pending_recovery_action(
+    action_id,
+    execution_status,
+    blocked_reason=None,
+    executed_at=None,
+):
+    """Atomically move an action out of PENDING at most once."""
+
     with get_connection() as connection:
         with connection.cursor(
             row_factory=dict_row
         ) as cursor:
-            cursor.execute(
-                query,
-                values,
+            action = _transition_pending_recovery_action(
+                cursor=cursor,
+                action_id=action_id,
+                execution_status=execution_status,
+                blocked_reason=blocked_reason,
+                executed_at=executed_at,
             )
 
-            return cursor.fetchone()
+            if action is not None:
+                return {
+                    "transition_applied": True,
+                    "action": action,
+                }
+
+            cursor.execute(
+                """
+                SELECT
+                    action_id,
+                    decision_id,
+                    action_type,
+                    execution_status,
+                    blocked_reason,
+                    policy_checks,
+                    executed_at,
+                    created_at
+                FROM recovery_actions
+                WHERE action_id = %s;
+                """,
+                (action_id,),
+            )
+
+            existing_action = cursor.fetchone()
+
+            if existing_action is None:
+                raise ValueError(
+                    f"Recovery action does not exist: {action_id}"
+                )
+
+            return {
+                "transition_applied": False,
+                "action": existing_action,
+            }
 
 def get_recovery_outcome_context(
     recovery_case_id,
