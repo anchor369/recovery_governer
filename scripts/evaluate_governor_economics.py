@@ -1,4 +1,3 @@
-import copy
 import csv
 from collections import Counter
 from datetime import datetime, timezone
@@ -12,39 +11,20 @@ from policy.economics import (
     expected_merchant_value_minor,
 )
 from policy.governor import RecoveryGovernor
-from simulator.action_candidates import (
-    ActionCandidateGenerator,
-)
 from simulator.config import SimulatorConfig
-from simulator.customer_generator import (
-    CustomerGenerator,
-)
-from simulator.decision_state import (
-    RecoveryDecisionStateBuilder,
-)
-from simulator.historical_policy import (
-    HistoricalRecoveryPolicy,
-)
-from simulator.history_generator import (
-    HistoricalJourneyGenerator,
-)
-from simulator.intervention_engine import (
-    InterventionEngine,
-)
-from simulator.journey_processor import (
-    JourneyProcessor,
-)
-from simulator.method_selector import (
-    PaymentMethodSelector,
-)
 from simulator.models import (
     ActionType,
-    PaymentStatus,
 )
-from simulator.random_source import RandomSource
 
 from simulator.action_codec import (
     action_to_label,
+)
+from scripts.evaluation_utils import (
+    collect_evaluation_states,
+    estimate_true_probability,
+    expected_discount_spend_minor,
+    find_action,
+    fixed_action_cost_minor,
 )
 
 REFERENCE_TIME = datetime(
@@ -86,330 +66,17 @@ governor = RecoveryGovernor(
     ),
 )
 
-def branch_recovered(
-    customer,
-    journey,
-    action,
-    seed,
-):
-
-    branch_random = RandomSource(
-        seed
-    )
-
-    processor = JourneyProcessor(
-        config=config,
-        random_source=branch_random,
-    )
-
-    engine = InterventionEngine(
-        config=config,
-        random_source=branch_random,
-        journey_processor=processor,
-    )
-
-    result = engine.simulate_action(
-        customer=customer,
-        journey=journey,
-        action=action,
-    )
-
-    return any(
-        attempt.status
-        == PaymentStatus.CAPTURED
-        for attempt
-        in result.payment_attempts
-    )
-
-
-def estimate_true_probability(
-    customer,
-    journey,
-    action,
-    state_index,
-):
-
-    successes = 0
-
-    for rollout_index in range(
-        ROLLOUTS_PER_ACTION
-    ):
-
-        seed = (
-            8_000_000
-            + state_index * 10_000
-            + rollout_index
-        )
-
-        successes += int(
-            branch_recovered(
-                customer=customer,
-                journey=journey,
-                action=action,
-                seed=seed,
-            )
-        )
-
-    return (
-        successes
-        / ROLLOUTS_PER_ACTION
-    )
-
-
-def collect_states():
-
-    world_random = RandomSource(
-        20260905
-    )
-
-    customer_generator = (
-        CustomerGenerator(
-            config=config,
-            random_source=world_random,
-        )
-    )
-
-    history_generator = (
-        HistoricalJourneyGenerator(
-            config=config,
-            random_source=world_random,
-            reference_time=REFERENCE_TIME,
-        )
-    )
-
-    processor = JourneyProcessor(
-        config=config,
-        random_source=world_random,
-    )
-
-    selector = PaymentMethodSelector(
-        config=config,
-        random_source=world_random,
-    )
-
-    state_builder = (
-        RecoveryDecisionStateBuilder(
-            random_source=world_random,
-            method_selector=selector,
-        )
-    )
-
-    candidate_generator = (
-        ActionCandidateGenerator(
-            config=config,
-            method_selector=selector,
-        )
-    )
-
-    historical_policy = (
-        HistoricalRecoveryPolicy(
-            random_source=world_random,
-        )
-    )
-
-    intervention_engine = (
-        InterventionEngine(
-            config=config,
-            random_source=world_random,
-            journey_processor=processor,
-        )
-    )
-
-    collected = []
-
-    while (
-        len(collected)
-        < EVALUATION_STATES
-    ):
-
-        customer = (
-            customer_generator
-            .generate_customer()
-        )
-
-        history = (
-            history_generator
-            .generate_history(customer)
-        )
-
-        observed_history = []
-
-        for journey in history:
-
-            processor.process_initial_attempt(
-                customer=customer,
-                journey=journey,
-            )
-
-            first_attempt = (
-                journey.payment_attempts[0]
-            )
-
-            if (
-                first_attempt.status
-                == PaymentStatus.CAPTURED
-            ):
-                observed_history.append(
-                    journey
-                )
-                continue
-
-            if (
-                first_attempt.status
-                == PaymentStatus.UNCERTAIN
-            ):
-                observed_history.append(
-                    journey
-                )
-                continue
-
-            state = state_builder.build(
-                customer=customer,
-                current_journey=journey,
-                prior_journeys=observed_history,
-            )
-
-            candidates = (
-                candidate_generator
-                .generate_candidates(
-                    customer=customer,
-                    journey=journey,
-                )
-            )
-
-            eligible_with_probabilities = (
-                historical_policy
-                .action_probabilities(
-                    state=state,
-                    candidates=candidates,
-                )
-            )
-
-            eligible_actions = [
-                action
-                for action, _
-                in eligible_with_probabilities
-            ]
-
-            collected.append(
-                (
-                    copy.deepcopy(customer),
-                    copy.deepcopy(journey),
-                    state,
-                    copy.deepcopy(
-                        eligible_actions
-                    ),
-                    eligible_with_probabilities,
-                )
-            )
-
-            # Continue factual synthetic history.
-            observed_action, _ = (
-                historical_policy.choose_action(
-                    state=state,
-                    candidates=candidates,
-                )
-            )
-
-            observed_result = (
-                intervention_engine
-                .simulate_action(
-                    customer=customer,
-                    journey=journey,
-                    action=observed_action,
-                )
-            )
-
-            observed_history.append(
-                observed_result
-            )
-
-            if (
-                len(collected)
-                >= EVALUATION_STATES
-            ):
-                break
-
-    return collected
-
-
-def find_action(
-    actions,
-    action_type,
-):
-
-    for action in actions:
-
-        if (
-            action.action_type
-            == action_type
-        ):
-            return action
-
-    return None
-
-
-def fixed_action_cost_minor(
-    action,
-):
-
-    if (
-        action.action_type
-        == ActionType.NUDGE
-    ):
-        return (
-            economics.nudge_cost_minor
-        )
-
-    if (
-        action.action_type
-        == ActionType.SWITCH_METHOD
-    ):
-        return (
-            economics.switch_cost_minor
-        )
-
-    if (
-        action.action_type
-        == ActionType.APPROVED_OFFER
-    ):
-        return (
-            economics.offer_execution_cost_minor
-        )
-
-    return 0.0
-
-
-def expected_discount_spend_minor(
-    state,
-    action,
-    recovery_probability,
-):
-
-    if (
-        action.action_type
-        != ActionType.APPROVED_OFFER
-    ):
-        return 0.0
-
-    discount = (
-        action.discount_percent
-        or 0.0
-    )
-
-    return (
-        recovery_probability
-        * state.current_amount_minor
-        * discount
-        / 100.0
-    )
-
-
 print()
 print("BUILDING ECONOMIC EVALUATION SET")
 print("--------------------------------")
 
-evaluation_states = collect_states()
+evaluation_states = collect_evaluation_states(
+    config=config,
+    reference_time=REFERENCE_TIME,
+    target_states=EVALUATION_STATES,
+    world_seed=20260905,
+    include_historical_probabilities=True,
+)
 
 print(
     "States:",
@@ -480,10 +147,13 @@ for state_index, (
             label
         ] = (
             estimate_true_probability(
+                config=config,
                 customer=customer,
                 journey=journey,
                 action=action,
                 state_index=state_index,
+                rollouts_per_action=ROLLOUTS_PER_ACTION,
+                seed_base=8_000_000,
             )
         )
 
@@ -697,7 +367,8 @@ for state_index, (
 
         action_cost = (
             fixed_action_cost_minor(
-                action
+                action,
+                economics,
             )
         )
 

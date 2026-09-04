@@ -2,6 +2,7 @@ import pytest
 
 from simulator.action_codec import (
     action_to_label,
+    treatment_label_to_features,
 )
 
 from simulator.models import (
@@ -93,3 +94,32 @@ def test_offer_requires_discount():
         match="requires discount_percent",
     ):
         action_to_label(action)
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        ("NO_ACTION", ("NO_ACTION", "NONE", 0.0)),
+        ("NUDGE", ("NUDGE", "NONE", 0.0)),
+        (
+            "SWITCH_CREDIT_CARD",
+            ("SWITCH_METHOD", "CREDIT_CARD", 0.0),
+        ),
+        (
+            "OFFER_10",
+            ("APPROVED_OFFER", "NONE", 10.0),
+        ),
+    ],
+)
+def test_treatment_label_to_features(label, expected):
+    assert treatment_label_to_features(label) == expected
+
+
+def test_unknown_treatment_label_is_rejected():
+    with pytest.raises(
+        ValueError,
+        match="Unknown treatment",
+    ):
+        treatment_label_to_features(
+            "WAIT_FOR_TRUTH"
+        )

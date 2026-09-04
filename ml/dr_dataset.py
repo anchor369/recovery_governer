@@ -10,63 +10,9 @@ import pandas as pd
 from ml.dr import (
     calculate_dr_pseudo_outcome,
 )
-
-
-def decode_treatment(
-    treatment: str,
-):
-    """
-    Convert treatment labels into action fields used by the S-learner.
-    """
-
-    if treatment == "NO_ACTION":
-        return (
-            "NO_ACTION",
-            "NONE",
-            0.0,
-        )
-
-    if treatment == "NUDGE":
-        return (
-            "NUDGE",
-            "NONE",
-            0.0,
-        )
-
-    if treatment.startswith(
-        "OFFER_"
-    ):
-        percentage = float(
-            treatment.split(
-                "_",
-                maxsplit=1,
-            )[1]
-        )
-
-        return (
-            "APPROVED_OFFER",
-            "NONE",
-            percentage,
-        )
-
-    if treatment.startswith(
-        "SWITCH_"
-    ):
-        target_method = (
-            treatment.removeprefix(
-                "SWITCH_"
-            )
-        )
-
-        return (
-            "SWITCH_METHOD",
-            target_method,
-            0.0,
-        )
-
-    raise ValueError(
-        f"Unknown treatment: {treatment}"
-    )
+from simulator.action_codec import (
+    treatment_label_to_features,
+)
 
 def treatment_is_eligible(
     row: pd.Series,
@@ -211,7 +157,7 @@ def build_dr_training_dataset(
                 action_type,
                 target_method,
                 discount_percent,
-            ) = decode_treatment(
+            ) = treatment_label_to_features(
                 treatment
             )
 

@@ -17,6 +17,9 @@ from ml.features import (
     CATEGORICAL_FEATURES,
     NUMERIC_FEATURES,
 )
+from simulator.action_codec import (
+    treatment_label_to_features,
+)
 
 
 ACTION_NUMERIC_FEATURES = [
@@ -164,7 +167,7 @@ class DoublyRobustLearner:
             action_type,
             target_method,
             discount_percent,
-        ) = self._decode_treatment(
+        ) = treatment_label_to_features(
             treatment
         )
 
@@ -216,59 +219,3 @@ class DoublyRobustLearner:
         )
 
         return prepared
-
-    @staticmethod
-    def _decode_treatment(
-        treatment: str,
-    ):
-
-        if treatment == "NO_ACTION":
-            return (
-                "NO_ACTION",
-                "NONE",
-                0.0,
-            )
-
-        if treatment == "NUDGE":
-            return (
-                "NUDGE",
-                "NONE",
-                0.0,
-            )
-
-        if treatment.startswith(
-            "OFFER_"
-        ):
-
-            percentage = float(
-                treatment.split(
-                    "_",
-                    maxsplit=1,
-                )[1]
-            )
-
-            return (
-                "APPROVED_OFFER",
-                "NONE",
-                percentage,
-            )
-
-        if treatment.startswith(
-            "SWITCH_"
-        ):
-
-            target_method = (
-                treatment.removeprefix(
-                    "SWITCH_"
-                )
-            )
-
-            return (
-                "SWITCH_METHOD",
-                target_method,
-                0.0,
-            )
-
-        raise ValueError(
-            f"Unknown treatment: {treatment}"
-        )
