@@ -4,6 +4,7 @@ from dataclasses import (
 )
 
 from backend.data_access.recovery import (
+    close_recovery_case_for_workflow_failure,
     create_recovery_case,
 )
 
@@ -134,63 +135,89 @@ def run_recovery_workflow(
         case_result["case"]
     )
 
-    decision = (
-        decision_service
-        .decide_for_order(
-            current_order_id=(
-                order_id
-            ),
-            decision_time=(
-                decision_time
-            ),
-            runtime_signals=(
-                runtime_signals
-            ),
+    failure_reason = "DECISION_FAILED"
+
+    try:
+        decision = (
+            decision_service
+            .decide_for_order(
+                current_order_id=(
+                    order_id
+                ),
+                decision_time=(
+                    decision_time
+                ),
+                runtime_signals=(
+                    runtime_signals
+                ),
+            )
         )
-    )
 
-    audit = (
-        persist_operational_decision(
-            recovery_case_id=(
-                recovery_case[
-                    "recovery_case_id"
-                ]
-            ),
-            prediction_time=(
-                decision_time
-            ),
-            operational_decision=(
-                decision
-            ),
-            governor=(
-                decision_service
-                .governor
-            ),
+        failure_reason = "AUDIT_FAILED"
+
+        audit = (
+            persist_operational_decision(
+                recovery_case_id=(
+                    recovery_case[
+                        "recovery_case_id"
+                    ]
+                ),
+                prediction_time=(
+                    decision_time
+                ),
+                operational_decision=(
+                    decision
+                ),
+                governor=(
+                    decision_service
+                    .governor
+                ),
+            )
         )
-    )
 
-    decision_id = (
-        audit[
-            "decision"
-        ][
-            "decision_id"
-        ]
-    )
-
-    chosen_action = (
-        decision
-        .governor_decision
-        .chosen_action
-    )
-
-    pending_action = (
-        create_pending_recovery_action(
-            decision_id=decision_id,
-            chosen_action=(
-                chosen_action
-            ),
+        decision_id = (
+            audit[
+                "decision"
+            ][
+                "decision_id"
+            ]
         )
-    )
+
+        chosen_action = (
+            decision
+            .governor_decision
+            .chosen_action
+        )
+
+        failure_reason = "ACTION_CREATION_FAILED"
+
+        pending_action = (
+            create_pending_recovery_action(
+                decision_id=decision_id,
+                chosen_action=(
+                    chosen_action
+                ),
+            )
+        )
+
+    except Exception as original_error:
+        try:
+            close_recovery_case_for_workflow_failure(
+                recovery_case_id=(
+                    recovery_case[
+                        "recovery_case_id"
+                    ]
+                ),
+                closure_reason=failure_reason,
+            )
+        except Exception as persistence_error:
+            original_error.add_note(
+                "Recovery workflow failure-state persistence "
+                f"also failed: {persistence_error}"
+            )
+            raise original_error from persistence_error
+
+        raise
 
     executed_action = (
         execute_recovery_action(
