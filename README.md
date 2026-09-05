@@ -1,8 +1,64 @@
 # Recovery Governor
 
-Payment-safe causal revenue recovery that chooses the safe intervention with the highest positive incremental merchant value relative to natural recovery.
+<p align="center">
+  <strong>Payment-safe counterfactual intelligence for failed-revenue recovery.</strong><br>
+  Choose the safe intervention with the highest positive incremental merchant value relative to natural recovery.
+</p>
 
-Traditional recovery systems often optimize raw recovery probability. Recovery Governor keeps payment evidence, operational policy, prediction, economics, execution, and outcome attribution separate:
+<p align="center">
+  <a href="#why-recovery-governor">Why it exists</a> ·
+  <a href="#architecture">Architecture</a> ·
+  <a href="#canonical-controlled-benchmark">Evidence</a> ·
+  <a href="#product-experience">Product tour</a> ·
+  <a href="#quickstart">Quickstart</a> ·
+  <a href="#testing">Testing</a>
+</p>
+
+> **Recovery Max ≠ Merchant Value Max.** A higher recovery probability is useful only when payment truth permits intervention and the expected incremental value remains positive after costs.
+
+Recovery Governor is a reference implementation of an end-to-end recovery decision system. It combines immutable payment evidence, conservative eligibility, treatment-aware ML, merchant economics, deterministic policy, transactional audit, concurrency-safe execution, and payment-backed outcome attribution.
+
+## Contents
+
+- [Why Recovery Governor](#why-recovery-governor)
+- [What the system does](#what-the-system-does)
+- [Architecture and decision authority](#architecture)
+- [AI model](#ai-model)
+- [Economic Governor and benchmark evidence](#economic-governor)
+- [Payment-safety invariants](#payment-safety-invariants)
+- [Product experience](#product-experience)
+- [API](#api)
+- [Quickstart](#quickstart)
+- [Project structure](#project-structure)
+- [Testing](#testing)
+- [Provider boundary and limitations](#provider-boundary)
+- [Repository artifacts](#repository-artifacts)
+
+## At a glance
+
+| Question | Implemented answer |
+|---|---|
+| What is optimized? | Expected incremental merchant value versus `NO_ACTION` |
+| What has final authority? | Payment truth and deterministic policy—not the model |
+| What does ML estimate? | Recovery probability under each candidate action |
+| What is the production model? | Pooled S-Learner in [`models/s_learner.joblib`](models/s_learner.joblib) |
+| What makes recovery verified? | A linked `CAPTURED` payment event |
+| Where is the decision explained? | Candidate-level audit plus the Recovery Lab |
+| What is persisted? | Orders, payments, events, cases, decisions, action scores, actions, and outcomes |
+| What data supports the demo and evaluation? | Persisted synthetic journeys and canonical controlled benchmark artifacts |
+| How is it validated? | Controlled policy comparisons and 231 automated tests |
+| What is the integration boundary? | Provider-agnostic event contract; provider-specific adapters are outside the current implementation |
+
+### Choose a reading path
+
+| Reader | Start here |
+|---|---|
+| Product or business reviewer | [Problem](#why-recovery-governor) → [benchmark](#canonical-controlled-benchmark) → [product tour](#product-experience) |
+| Payments or backend engineer | [Architecture](#architecture) → [safety invariants](#payment-safety-invariants) → [API](#api) |
+| ML or causal-inference reviewer | [AI model](#ai-model) → [economic objective](#economic-governor) → [canonical artifacts](#repository-artifacts) |
+| Evaluator running the project | [Quickstart](#quickstart) → [guided walkthrough](#first-end-to-end-walkthrough) → [testing](#testing) |
+
+The system deliberately keeps its responsibilities separate:
 
 ```text
 Payment Truth
@@ -16,11 +72,7 @@ Payment Truth
 → Payment-backed Outcome
 ```
 
-The core principle is simple:
-
-> Recovery Max ≠ Merchant Value Max
-
-## Problem
+## Why Recovery Governor
 
 A failed-looking payment does not automatically justify intervention:
 
@@ -76,6 +128,19 @@ flowchart TD
 ```
 
 FastAPI provides the application boundary, PostgreSQL stores financial and audit state, and Streamlit reads and operates the system only through the HTTP API.
+
+### Decision authority
+
+| Layer | Owns | Does not own |
+|---|---|---|
+| Financial truth | Whether evidence means `PAID`, `UNCERTAIN`, or `UNPAID` | Recovery recommendations |
+| Eligibility | Whether an order may enter recovery | Candidate ranking |
+| Counterfactual ML | Predicted recovery under each candidate action | Payment state, policy, or execution |
+| Economic Governor | Policy-safe action selection by incremental value | Payment attribution |
+| Execution | Claiming and performing the chosen action | Proof of recovery |
+| Outcome attribution | Linking a recovery to confirmed `CAPTURED` evidence | Retrospective model authority |
+
+This direction is enforced in code and audit data: the model can inform a decision, but it cannot promote uncertain evidence to failure, execute an action, or declare revenue recovered.
 
 ## AI model
 
@@ -194,6 +259,30 @@ The Streamlit product has five connected pages:
 - **Economics & Policy** — controlled strategy benchmarks and merchant utility-threshold tradeoffs.
 - **System** — architecture, authority boundaries, model action space, enforced guarantees, and known limitations.
 
+### Recovery Lab: one decision, end to end
+
+Recovery Lab freezes the observable decision-time state, compares the same order under every valid action, and exposes the Governor's selected action separately from current payment truth. In the captured scenario below, natural recovery is predicted at 71.0%; the Governor correctly keeps `NO_ACTION` because no permitted intervention creates positive incremental merchant value.
+
+![Recovery Lab decision snapshot and counterfactual comparison](docs/assets/recovery-lab-counterfactual.png)
+
+*Decision-time truth, model output, and merchant value remain visibly separate.*
+
+The explanation layer then shows why the action won and confirms that the feature snapshot, candidate scores, policy reasons, and chosen action were persisted as a decision audit.
+
+![Recovery Lab Governor explanation and decision audit](docs/assets/recovery-lab-governor-audit.png)
+
+*A valid recovery decision can be `NO_ACTION`; restraint is a first-class outcome, not a missing prediction.*
+
+The remaining pages answer different operational questions without duplicating the full decision inspector:
+
+| Page | Question answered |
+|---|---|
+| Overview | Is the Governor creating merchant value overall? |
+| Merchant Ops | Which persisted orders are open, recovered, blocked, or otherwise resolved? |
+| Recovery Lab | Why did this payment journey receive this decision? |
+| Economics & Policy | Does the strategy beat simpler policies across controlled opportunities? |
+| System | How does the engine preserve payment safety and technical auditability? |
+
 ## API
 
 The implemented FastAPI routes are:
@@ -296,6 +385,36 @@ Open:
 - Swagger UI: `http://127.0.0.1:8000/docs`
 
 The dashboard uses `RECOVERY_API_BASE_URL` from `.env` and otherwise defaults to `http://127.0.0.1:8000`.
+
+### First end-to-end walkthrough
+
+The UI is the clearest way to exercise the complete system:
+
+1. Open **Recovery Lab**.
+2. Keep **New customer** and **Two confirmed failures** selected.
+3. Initialize the checkout journey. The API persists an order, two failed attempts, and their payment events.
+4. Confirm that truth is `UNPAID`, two failures are observed, and the order is recovery eligible.
+5. Run recovery intelligence. The real S-Learner scores the candidates and the real Governor makes the decision; no action label is hard-coded by the preset.
+6. Inspect the candidate evidence, Governor explanation, decision audit, current outcome, and lifecycle timeline.
+7. Open **Merchant Ops** to see the persisted case in the wider operational portfolio.
+
+The same deterministic scenario can be initialized over HTTP:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/demo/scenarios \
+  -H "Content-Type: application/json" \
+  -d '{"preset":"two_failures","customer_profile":"new_customer"}'
+```
+
+Use the returned `order_id` to run recovery with observable runtime signals:
+
+```bash
+curl -X POST http://127.0.0.1:8000/api/orders/<order_id>/recovery \
+  -H "Content-Type: application/json" \
+  -d '{"available_upi":true,"available_credit_card":true,"available_debit_card":true,"available_netbanking":true,"observed_rail_health":0.9,"customer_active":false}'
+```
+
+These demo endpoints create persisted synthetic evidence. Viewing Overview, Merchant Ops, or an existing recovery record remains read-only.
 
 ## Project structure
 
