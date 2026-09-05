@@ -21,20 +21,25 @@ class ConflictingPaymentEventError(ValueError):
     """Raised when an idempotency key is reused for different evidence."""
 
 
-def create_customer(customer_id, contact_consent=True):
-    query = """
-        INSERT INTO customers (
-            customer_id,
-            contact_consent
-        )
-        VALUES (%s, %s);
-    """
+def create_customer(customer_id, contact_consent=True, created_at=None):
+    if created_at is None:
+        query = """
+            INSERT INTO customers (customer_id, contact_consent)
+            VALUES (%s, %s);
+        """
+        values = (customer_id, contact_consent)
+    else:
+        query = """
+            INSERT INTO customers (customer_id, contact_consent, created_at)
+            VALUES (%s, %s, %s);
+        """
+        values = (customer_id, contact_consent, created_at)
 
     with get_connection() as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 query,
-                (customer_id, contact_consent)
+                values
             )
 
 def get_customer(customer_id):
@@ -62,19 +67,10 @@ def create_order(
         customer_id,
         amount_minor,
         status="CREATED",
-        currency="INR"
+        currency="INR",
+        created_at=None,
     ):
-    query = """
-        INSERT INTO orders (
-            order_id,
-            customer_id,
-            amount_minor,
-            currency,
-            status
-        )
-        VALUES (%s, %s, %s, %s, %s);
-    """
-
+    columns = "order_id, customer_id, amount_minor, currency, status"
     values = (
         order_id,
         customer_id,
@@ -82,6 +78,12 @@ def create_order(
         currency,
         status
     )
+    placeholders = "%s, %s, %s, %s, %s"
+    if created_at is not None:
+        columns += ", created_at"
+        values += (created_at,)
+        placeholders += ", %s"
+    query = f"INSERT INTO orders ({columns}) VALUES ({placeholders});"
 
     with get_connection() as connection:
         with connection.cursor() as cursor:
@@ -147,19 +149,10 @@ def create_payment(
     order_id,
     method,
     status="CREATED",
-    failure_reason=None
+    failure_reason=None,
+    created_at=None,
 ):
-    query = """
-        INSERT INTO payments (
-            payment_id,
-            order_id,
-            method,
-            status,
-            failure_reason
-        )
-        VALUES (%s, %s, %s, %s, %s);
-    """
-
+    columns = "payment_id, order_id, method, status, failure_reason"
     values = (
         payment_id,
         order_id,
@@ -167,6 +160,12 @@ def create_payment(
         status,
         failure_reason
     )
+    placeholders = "%s, %s, %s, %s, %s"
+    if created_at is not None:
+        columns += ", created_at"
+        values += (created_at,)
+        placeholders += ", %s"
+    query = f"INSERT INTO payments ({columns}) VALUES ({placeholders});"
 
     with get_connection() as connection:
         with connection.cursor() as cursor:

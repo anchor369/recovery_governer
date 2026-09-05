@@ -58,8 +58,12 @@ class RecoveryAPIClient:
     def health_check(self):
         return self._request("GET", "/health")
 
-    def create_demo_scenario(self, preset):
-        return self._request("POST", "/api/demo/scenarios", {"preset": preset})
+    def create_demo_scenario(self, preset, customer_profile="new_customer"):
+        return self._request(
+            "POST",
+            "/api/demo/scenarios",
+            {"preset": preset, "customer_profile": customer_profile},
+        )
 
     def run_recovery(self, order_id, runtime_signals):
         return self._request(

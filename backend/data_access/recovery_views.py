@@ -51,9 +51,15 @@ def get_order_recovery_records(order_id):
 
             cursor.execute(
                 """
-                SELECT pe.*, p.method
+                SELECT
+                    pe.*,
+                    p.method,
+                    p.failure_reason,
+                    o.amount_minor,
+                    o.currency
                 FROM payment_events pe
                 JOIN payments p ON p.payment_id = pe.payment_id
+                JOIN orders o ON o.order_id = p.order_id
                 WHERE p.order_id = %s
                 ORDER BY pe.event_time, pe.received_at, pe.event_id;
                 """,

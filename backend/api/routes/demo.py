@@ -9,4 +9,4 @@ router = APIRouter(prefix="/api/demo", tags=["demo"])
 
 @router.post("/scenarios", response_model=DemoScenarioResponse)
 def create_scenario(request: DemoScenarioRequest):
-    return create_demo_scenario(request.preset)
+    return create_demo_scenario(request.preset, request.customer_profile)

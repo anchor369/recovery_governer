@@ -15,13 +15,22 @@ class DemoPreset(StrEnum):
     NATURAL_RETRY = "natural_retry"
 
 
+class DemoCustomerProfile(StrEnum):
+    NEW_CUSTOMER = "new_customer"
+    LOYAL_RETURNING = "loyal_returning"
+    MIXED_HISTORY = "mixed_history"
+
+
 class DemoScenarioRequest(BaseModel):
     preset: DemoPreset = DemoPreset.TWO_FAILURES
+    customer_profile: DemoCustomerProfile = DemoCustomerProfile.NEW_CUSTOMER
 
 
 class DemoScenarioResponse(BaseModel):
     preset: DemoPreset
+    customer_profile: DemoCustomerProfile
     customer_id: str
     order_id: str
     payment_ids: list[str]
+    journey: dict[str, Any]
     metadata: dict[str, Any]

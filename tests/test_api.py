@@ -7,7 +7,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.api.main import app
-from backend.data_access.payments import create_customer, create_order, create_payment
+from backend.data_access.payments import (
+    create_customer,
+    create_order,
+    create_payment,
+    get_payment_events_for_order_before_time,
+)
 
 
 client = TestClient(app)
@@ -25,7 +30,10 @@ def create_payment_record():
 
 
 def create_demo(preset):
-    response = client.post("/api/demo/scenarios", json={"preset": preset})
+    response = client.post(
+        "/api/demo/scenarios",
+        json={"preset": preset, "customer_profile": "new_customer"},
+    )
     assert response.status_code == 200
     return response.json()
 
@@ -122,6 +130,79 @@ def test_demo_scenario_presets(preset, expected_payments):
     assert len(scenario["payment_ids"]) == expected_payments
     assert scenario["customer_id"]
     assert scenario["order_id"]
+    assert scenario["journey"]["current_payment_attempts"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "orders", "successes", "failures", "median_amount", "amount_ratio"),
+    [
+        ("new_customer", 0, 0, 0, None, 1.0),
+        ("loyal_returning", 4, 4, 0, 150_000, 1.0),
+        ("mixed_history", 4, 2, 2, 165_000, 150_000 / 165_000),
+    ],
+)
+def test_demo_customer_profiles_create_real_time_safe_history(
+    profile, orders, successes, failures, median_amount, amount_ratio
+):
+    response = client.post(
+        "/api/demo/scenarios",
+        json={"preset": "two_failures", "customer_profile": profile},
+    )
+    assert response.status_code == 200
+    scenario = response.json()
+    history = scenario["journey"]["history"]
+    current_created_at = datetime.fromisoformat(
+        scenario["journey"]["order"]["created_at"]
+    )
+
+    assert scenario["customer_profile"] == profile
+    assert history["prior_checkout_count"] == orders
+    assert history["prior_success_count"] == successes
+    assert history["prior_failure_count"] == failures
+    assert history["prior_uncertain_count"] == 0
+    assert history["median_prior_amount_minor"] == median_amount
+    assert history["amount_ratio"] == pytest.approx(amount_ratio)
+    assert all(
+        datetime.fromisoformat(order["created_at"]) < current_created_at
+        for order in history["orders"]
+    )
+
+
+def test_demo_history_is_derived_into_persisted_decision_snapshot():
+    scenario_response = client.post(
+        "/api/demo/scenarios",
+        json={"preset": "two_failures", "customer_profile": "loyal_returning"},
+    )
+    scenario = scenario_response.json()
+    workflow = run_recovery(scenario)
+    assert workflow.status_code == 200
+    snapshot = workflow.json()["decision"]["feature_snapshot"]
+
+    assert snapshot["prior_checkout_count"] == 4
+    assert snapshot["prior_success_count"] == 4
+    assert snapshot["prior_failure_count"] == 0
+    assert snapshot["amount_ratio"] == pytest.approx(1.0)
+    assert snapshot["prior_upi_attempt_count"] == 2
+    assert snapshot["prior_upi_success_count"] == 2
+
+
+def test_demo_history_payment_and_event_times_precede_decision_time():
+    response = client.post(
+        "/api/demo/scenarios",
+        json={"preset": "two_failures", "customer_profile": "mixed_history"},
+    )
+    scenario = response.json()
+    decision_time = datetime.now(timezone.utc)
+
+    for order in scenario["journey"]["history"]["orders"]:
+        events = get_payment_events_for_order_before_time(
+            order_id=order["order_id"],
+            before_time=decision_time,
+        )
+        assert events
+        assert all(event["payment_created_at"] < decision_time for event in events)
+        assert all(event["event_time"] < decision_time for event in events)
+        assert all(event["received_at"] < decision_time for event in events)
 
 
 @pytest.mark.parametrize(
@@ -203,6 +284,13 @@ def test_recovered_timeline_contains_full_lifecycle():
         "RECOVERY_OUTCOME",
         "RECOVERY_CASE_CLOSED",
     } <= types
+    failed_event = next(
+        item for item in timeline
+        if item["type"] == "PAYMENT_EVENT" and item["title"] == "FAILED"
+    )
+    assert failed_event["details"]["failure_reason"] == "TECHNICAL_FAILURE"
+    assert failed_event["details"]["amount_minor"] == 150_000
+    assert failed_event["details"]["currency"] == "INR"
 
 
 def test_recovery_case_list_and_metrics_schemas():

@@ -42,6 +42,9 @@ def build_order_timeline(order_id):
                 "payment_id": event["payment_id"],
                 "provider_event_id": event["provider_event_id"],
                 "method": event["method"],
+                "failure_reason": event["failure_reason"],
+                "amount_minor": event["amount_minor"],
+                "currency": event["currency"],
             },
         })
 

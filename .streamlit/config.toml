@@ -1,0 +1,12 @@
+[client]
+showSidebarNavigation = false
+toolbarMode = "viewer"
+
+[theme]
+base = "light"
+primaryColor = "#4656D8"
+backgroundColor = "#F6F7F9"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#172033"
+baseRadius = "0.5rem"
+buttonRadius = "0.45rem"

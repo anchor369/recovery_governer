@@ -34,10 +34,12 @@ with st.sidebar:
     st.divider()
     try:
         health = client.health_check()
-        if health.get("database") == "connected" and health.get("model") == "loaded":
-            st.success("Backend connected")
-        else:
-            st.warning("Backend health is degraded")
+        st.markdown(
+            '<div class="health-row"><span>API</span><span>Online</span></div>'
+            f'<div class="health-row"><span>Database</span><span>{health.get("database", "Unknown").title()}</span></div>'
+            f'<div class="health-row"><span>Model</span><span>{health.get("model", "Unknown").title()}</span></div>',
+            unsafe_allow_html=True,
+        )
     except RecoveryAPIError:
         st.error("FastAPI unavailable")
         st.caption(f"Expected at {client.base_url}")
