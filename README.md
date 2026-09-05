@@ -1712,6 +1712,21 @@ execution-state monitoring
 
 ---
 
+# Streamlit Recovery Lab
+
+Run FastAPI and Streamlit in separate terminals from the repository root:
+
+```bash
+python -m uvicorn backend.api.main:app
+streamlit run dashboard/app.py
+```
+
+The dashboard uses `RECOVERY_API_BASE_URL` when set and otherwise connects to
+`http://127.0.0.1:8000`. It communicates with the recovery system only through
+the HTTP API.
+
+---
+
 # Architecture Summary
 
 ```mermaid
