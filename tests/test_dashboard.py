@@ -28,6 +28,7 @@ from dashboard.pages.merchant_ops import (
     filter_recovery_cases,
     outcome_group,
 )
+from dashboard.pages.economics import build_strategy_rows, prepare_economics_data
 from dashboard.pages.overview import benchmark_summary, prepare_overview_data
 from dashboard.pages.recovery_lab import (
     capture_decision_snapshot,
@@ -275,6 +276,17 @@ def test_overview_keeps_live_metrics_separate_from_canonical_benchmark():
                 "incremental_value_minor_per_failure": "2529.950176",
             },
         ],
+        "canonical_thresholds": [
+            {
+                "policy": "GOVERNOR_T5",
+                "recovery_rate": "0.64328",
+                "intervention_rate": "0.436",
+                "unnecessary_intervention_rate": "0.183486",
+                "merchant_value_minor_per_failure": "40852.849772",
+                "incremental_value_minor_per_failure": "2238.031768",
+                "economic_regret_minor_per_failure": "1594.909396",
+            }
+        ],
     }
 
     page_data = prepare_overview_data(metrics)
@@ -286,6 +298,18 @@ def test_overview_keeps_live_metrics_separate_from_canonical_benchmark():
     assert summary["recovery_gap_pp"] == pytest.approx(0.088)
     assert summary["recovery_max"]["incremental_value"] == pytest.approx(13.16887936)
     assert summary["economic_governor"]["incremental_value"] == pytest.approx(25.29950176)
+
+    economics = prepare_economics_data(metrics)
+    rows = build_strategy_rows(economics["benchmarks"])
+    assert [row["Strategy"] for row in rows] == [
+        "Recovery-Max ML",
+        "Economic Governor",
+    ]
+    assert rows[1]["Recovery"] == "65.09%"
+    assert rows[1]["Incremental Value / Failure"] == "INR 25.30"
+    assert economics["modes"][0]["name"] == "Balanced"
+    assert economics["modes"][0]["threshold"] == "INR 5"
+    assert economics["modes"][0]["incremental_value"] == pytest.approx(22.38031768)
 
 
 def test_merchant_ops_filters_use_only_returned_case_fields():

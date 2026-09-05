@@ -1,1801 +1,370 @@
-# Payment-Safe Causal Revenue Recovery Governor
+# Recovery Governor
 
-A payment recovery system that combines **financial truth, counterfactual recovery prediction, merchant economics, deterministic policy controls, auditable execution, and payment-linked outcomes** to decide when and how failed payments should be recovered.
+Payment-safe causal revenue recovery that chooses the safe intervention with the highest positive incremental merchant value relative to natural recovery.
 
-The system is designed around a simple principle:
-
-> A recovery action should be taken only when it is operationally safe and expected to create more merchant value than doing nothing.
-
----
-
-## Table of Contents
-
-- [Overview](#overview)
-- [Problem](#problem)
-- [Design Principles](#design-principles)
-- [Architecture](#architecture)
-- [Payment Truth](#payment-truth)
-- [Recovery Eligibility](#recovery-eligibility)
-- [Decision State](#decision-state)
-- [Recovery Actions](#recovery-actions)
-- [Machine Learning](#machine-learning)
-- [Counterfactual Evaluation](#counterfactual-evaluation)
-- [Economic Governor](#economic-governor)
-- [Policy Guardrails](#policy-guardrails)
-- [Decision Audit](#decision-audit)
-- [Execution Safety](#execution-safety)
-- [Recovery Outcomes](#recovery-outcomes)
-- [Database Architecture](#database-architecture)
-- [Evaluation Results](#evaluation-results)
-- [Merchant Modes](#merchant-modes)
-- [Feature Engineering](#feature-engineering)
-- [Temporal Leakage Protection](#temporal-leakage-protection)
-- [Model Experiments](#model-experiments)
-- [Repository Structure](#repository-structure)
-- [Environment](#environment)
-- [Installation](#installation)
-- [Database Setup](#database-setup)
-- [Running the Pipeline](#running-the-pipeline)
-- [Testing](#testing)
-- [Operational Smoke Test](#operational-smoke-test)
-- [Engineering Guarantees](#engineering-guarantees)
-- [Known Limitations](#known-limitations)
-- [Planned Extensions](#planned-extensions)
-
----
-
-# Overview
-
-Payment recovery is often framed as a classification problem:
+Traditional recovery systems often optimize raw recovery probability. Recovery Governor keeps payment evidence, operational policy, prediction, economics, execution, and outcome attribution separate:
 
 ```text
-Will this failed payment recover?
+Payment Truth
+→ Recovery Eligibility
+→ Observable Decision State
+→ Counterfactual ML
+→ Merchant Economics
+→ Deterministic Governor
+→ Decision Audit
+→ Execution
+→ Payment-backed Outcome
 ```
 
-This project treats recovery as a **decision problem** instead.
+The core principle is simple:
 
-For each eligible failed order, the system evaluates several possible interventions and estimates the expected outcome under each one.
+> Recovery Max ≠ Merchant Value Max
 
-Examples include:
+## Problem
 
-```text
-NO_ACTION
-NUDGE
-SWITCH_UPI
-SWITCH_CREDIT_CARD
-SWITCH_DEBIT_CARD
-SWITCH_NETBANKING
-OFFER_5
-OFFER_10
-```
+A failed-looking payment does not automatically justify intervention:
 
-For every candidate action, the system estimates:
+- the customer may recover naturally;
+- payment state may still be unresolved;
+- retries, messages, and payment-method switches have execution costs;
+- discounts can increase recovery while destroying merchant value;
+- payment truth may change after a decision; and
+- executing an action is not the same as recovering revenue.
 
-```text
-Recovery probability
-Uplift over NO_ACTION
-Expected merchant value
-Incremental utility
-```
+The system therefore optimizes expected incremental merchant value—not intervention volume or recovery probability alone—subject to authoritative payment truth and deterministic safety constraints.
 
-The final action is selected by a deterministic **Recovery Governor** that combines model estimates with merchant economics and safety rules.
+## What the system does
 
----
+For each payment journey, the implemented workflow:
 
-# Problem
+1. Receives and materializes immutable payment-event evidence.
+2. Establishes authoritative financial truth: `PAID`, `UNCERTAIN`, or `UNPAID`.
+3. Applies deterministic recovery eligibility.
+4. Builds a decision-time state from observable information only.
+5. Scores every structurally available action with the pooled S-Learner.
+6. Calculates expected merchant value relative to `NO_ACTION`.
+7. Lets the deterministic Economic Governor select a policy-safe, positive-value action.
+8. Persists the decision and every candidate score atomically.
+9. Creates and atomically claims the recovery action.
+10. Rechecks payment truth immediately before execution.
+11. Records recovery only after a linked `CAPTURED` payment event.
 
-Maximizing recovery rate alone can produce poor recovery policies.
+**ML predicts. The Governor decides. Payment truth remains authoritative.**
 
-A strategy may recover slightly more payments while also causing:
-
-```text
-higher discount spend
-more unnecessary customer contact
-higher execution cost
-greater intervention intensity
-lower merchant margin
-```
-
-For example, an incentive can increase the probability of recovery while still reducing expected merchant value.
-
-The objective is therefore not:
-
-```text
-maximize P(recovery)
-```
-
-but:
-
-```text
-maximize expected incremental merchant value
-subject to payment safety and operational policy
-```
-
----
-
-# Design Principles
-
-The system deliberately separates four responsibilities:
-
-```text
-Prediction
-    ≠
-Policy
-    ≠
-Execution
-    ≠
-Financial Truth
-```
-
-**Prediction** estimates recovery probability under possible actions.
-
-**Policy** determines whether an action is allowed.
-
-**Execution** records what was actually attempted.
-
-**Financial truth** determines whether payment was ultimately recovered.
-
-This separation prevents model output from becoming an authority over payment state.
-
----
-
-# Architecture
+## Architecture
 
 ```mermaid
 flowchart TD
+    E[Provider or Demo Events] --> I[Payment Event Ingestion]
+    I --> T[Financial Truth]
+    T --> G[Recovery Eligibility]
+    G --> S[Observable Decision State]
+    S --> M[Pooled S-Learner]
+    M --> C[Counterfactual Action Scores]
+    C --> V[Merchant Economics]
+    V --> R[Economic Governor]
+    R --> A[Transactional Decision Audit]
+    A --> X[Recovery Action]
+    X --> P[Payment Truth Recheck]
+    P --> K[CAPTURED Payment Evidence]
+    K --> O[Verified Recovery Outcome]
 
-    A[Payment Provider / Payment Events] --> B[Financial Truth Layer]
-
-    B -->|PAID| C[Stop Recovery]
-    B -->|UNCERTAIN| D[Wait for Truth]
-    B -->|UNPAID| E[Recovery Eligibility]
-
-    E -->|First Confirmed Failure| F[Allow Natural Retry]
-    E -->|Not Eligible| G[No Recovery]
-    E -->|Multiple Confirmed Failures| H[Open Recovery Case]
-
-    H --> I[Build Observable Decision State]
-
-    I --> J[Counterfactual Recovery Model]
-
-    J --> K[Candidate Recovery Probabilities]
-
-    K --> L[Merchant Economics]
-
-    L --> M[Recovery Governor]
-
-    M --> N[Decision Audit]
-
-    N --> O[Create Recovery Action]
-
-    O --> P[Pre-Execution Payment Truth Recheck]
-
-    P -->|PAID| Q[Block Action]
-    P -->|UNCERTAIN| R[Block Action]
-    P -->|UNPAID| S[Execute Action]
-
-    S --> T[Subsequent Payment Attempt]
-
-    T --> U{Captured?}
-
-    U -->|No| V[Continue Observation]
-    U -->|Yes| W[Record Recovery Outcome]
-
-    W --> X[Close Recovery Case]
+    API[FastAPI] --- I
+    DB[(PostgreSQL)] --- T
+    DB --- A
+    UI[Streamlit] --- API
 ```
 
-The architecture follows a strict dependency direction:
+FastAPI provides the application boundary, PostgreSQL stores financial and audit state, and Streamlit reads and operates the system only through the HTTP API.
 
-```text
-Financial Truth
-    ↓
-Eligibility
-    ↓
-Decision State
-    ↓
-Prediction
-    ↓
-Economics
-    ↓
-Policy
-    ↓
-Execution
-    ↓
-Outcome
-```
+## AI model
 
----
-
-# Payment Truth
-
-The payment layer is the authority for financial state.
-
-The recovery model does not infer whether an order is paid.
-
-## PAID
-
-If any payment attempt has a confirmed `CAPTURED` state:
-
-```text
-CAPTURED
-    ↓
-PAID
-    ↓
-STOP
-```
-
-No recovery action should be executed.
-
-## UNCERTAIN
-
-Statuses such as:
-
-```text
-CREATED
-AUTHORIZED
-```
-
-represent unresolved payment state.
-
-The workflow returns:
-
-```text
-WAIT_FOR_TRUTH
-```
-
-Recovery intervention is withheld until the payment state becomes definitive.
-
-## UNPAID
-
-Only confirmed failure can proceed into recovery eligibility.
-
----
-
-## Historical Truth
-
-For historical reconstruction, payment truth is calculated using event history as of a specified decision time.
-
-An event is considered known only when:
-
-```text
-event_time < decision_time
-```
-
-and:
-
-```text
-received_at < decision_time
-```
-
-This prevents delayed or future events from entering historical decision state.
-
----
-
-# Recovery Eligibility
-
-Recovery is not opened immediately after the first confirmed failure.
-
-```mermaid
-stateDiagram-v2
-
-    [*] --> InitialAttempt
-
-    InitialAttempt --> Paid: CAPTURED
-    InitialAttempt --> NaturalRetry: First confirmed failure
-    InitialAttempt --> Wait: Payment unresolved
-
-    NaturalRetry --> Paid: CAPTURED
-    NaturalRetry --> RecoveryEligible: Additional confirmed failure
-
-    RecoveryEligible --> RecoveryCase
-
-    RecoveryCase --> Closed: Recovery completed
-```
-
-The current eligibility policy includes the following outcomes:
-
-| Condition | Result |
-|---|---|
-| Order already paid | `ORDER_ALREADY_PAID` |
-| Payment state unresolved | `PAYMENT_STATE_UNCERTAIN` |
-| No confirmed failure | `NO_CONFIRMED_FAILURE` |
-| First confirmed failure | `ALLOW_NATURAL_RETRY` |
-| Active recovery case already exists | `RECOVERY_CASE_ALREADY_EXISTS` |
-| Multiple confirmed failures | `MULTIPLE_CONFIRMED_FAILURES` |
-
-A partial unique database index ensures that an order cannot have more than one active recovery case.
-
----
-
-# Decision State
-
-The model receives a production-compatible state built only from observable information.
-
-The state includes information from four groups.
-
-### Current payment state
-
-```text
-current payment method
-failure category
-attempt count
-current order amount
-```
-
-### Customer history
-
-```text
-customer tenure
-prior checkout count
-prior success count
-prior failure count
-historical success rate
-order amount ratio
-```
-
-### Payment-method history
-
-For each supported payment method:
-
-```text
-attempt count
-success count
-success rate
-```
-
-Supported methods currently include:
-
-```text
-UPI
-CREDIT_CARD
-DEBIT_CARD
-NETBANKING
-```
-
-### Runtime signals
-
-```text
-contact consent
-customer activity
-payment-method availability
-observed rail health
-```
-
-Simulator-only hidden variables are not required by the operational decision path.
-
----
-
-# Recovery Actions
-
-The current action space is:
-
-| Action | Description |
-|---|---|
-| `NO_ACTION` | Allow natural recovery |
-| `NUDGE` | Send a recovery reminder |
-| `SWITCH_UPI` | Recommend UPI |
-| `SWITCH_CREDIT_CARD` | Recommend credit card |
-| `SWITCH_DEBIT_CARD` | Recommend debit card |
-| `SWITCH_NETBANKING` | Recommend netbanking |
-| `OFFER_5` | Offer a 5% incentive |
-| `OFFER_10` | Offer a 10% incentive |
-
-Candidate generation is structural.
-
-For example:
-
-```text
-current method = NETBANKING
-```
-
-means:
-
-```text
-SWITCH_NETBANKING
-```
-
-is excluded because switching to the current payment method has no operational meaning.
-
----
-
-# Machine Learning
-
-The production recovery model is a pooled **S-Learner**.
-
-The model estimates:
+The production champion is a pooled **S-Learner**, stored at [`models/s_learner.joblib`](models/s_learner.joblib). It performs treatment-aware supervised prediction of:
 
 ```text
 P(recovery | observable state, candidate action)
 ```
 
-The same decision state is evaluated repeatedly with different candidate actions.
+The same observable state is scored under each canonical candidate action:
 
-```mermaid
-flowchart LR
+- `NO_ACTION`
+- `NUDGE`
+- `SWITCH_UPI`
+- `SWITCH_CREDIT_CARD`
+- `SWITCH_DEBIT_CARD`
+- `SWITCH_NETBANKING`
+- `OFFER_5`
+- `OFFER_10`
 
-    S[Observable Decision State]
+`NO_ACTION` is always the natural-recovery baseline. `WAIT_FOR_TRUTH` is a deterministic workflow state for unresolved payment evidence; it is not an ML treatment.
 
-    S --> A1[NO_ACTION]
-    S --> A2[NUDGE]
-    S --> A3[SWITCH_UPI]
-    S --> A4[SWITCH_CARD]
-    S --> A5[OFFER_5]
-    S --> A6[OFFER_10]
+T-Learner, inverse-propensity-weighted S-Learner, and doubly robust learner implementations remain in the repository as experiments and evaluation approaches. They are not the deployed champion. The Economic Governor is deterministic policy and economics logic, not an AI model.
 
-    A1 --> M[S-Learner]
-    A2 --> M
-    A3 --> M
-    A4 --> M
-    A5 --> M
-    A6 --> M
+## Economic Governor
 
-    M --> P1[Recovery Probability 1]
-    M --> P2[Recovery Probability 2]
-    M --> P3[Recovery Probability 3]
-    M --> P4[Recovery Probability 4]
-    M --> P5[Recovery Probability 5]
-    M --> P6[Recovery Probability 6]
-```
+Recovery-Max asks:
 
-The production model is stored at:
+> Which action gives the highest recovery probability?
+
+The Economic Governor asks:
+
+> Which safe action creates the highest positive incremental merchant value compared with natural recovery?
+
+For candidate action `a`:
 
 ```text
-models/s_learner.joblib
+Incremental Utility(a)
+= Expected Merchant Value(a)
+- Expected Merchant Value(NO_ACTION)
 ```
 
----
+If no intervention clears policy constraints and produces positive incremental utility, `NO_ACTION` wins.
 
-# Counterfactual Evaluation
+### Canonical controlled benchmark
 
-The project includes a stochastic simulator used as a digital twin for policy evaluation.
+The committed [`data/economic_benchmark_summary.csv`](data/economic_benchmark_summary.csv) reports:
 
-For a fixed observable decision state, the simulator can replay the outcome repeatedly under different actions.
-
-Conceptually:
-
-```mermaid
-flowchart TD
-
-    S[Fixed Decision State]
-
-    S --> A[NO_ACTION]
-    S --> B[NUDGE]
-    S --> C[SWITCH_METHOD]
-    S --> D[OFFER]
-
-    A --> RA[Repeated Rollouts]
-    B --> RB[Repeated Rollouts]
-    C --> RC[Repeated Rollouts]
-    D --> RD[Repeated Rollouts]
-
-    RA --> PA[Estimated Counterfactual Probability]
-    RB --> PB[Estimated Counterfactual Probability]
-    RC --> PC[Estimated Counterfactual Probability]
-    RD --> PD[Estimated Counterfactual Probability]
-
-    PA --> E[Policy Evaluation]
-    PB --> E
-    PC --> E
-    PD --> E
-```
-
-This allows evaluation beyond factual classification accuracy.
-
-Metrics include:
-
-```text
-probability MAE
-uplift MAE
-uplift correlation
-best-action accuracy
-policy recovery rate
-oracle recovery rate
-oracle regret
-```
-
-The simulator's hidden variables are not exposed to the production model.
-
----
-
-# Economic Governor
-
-The ML model supplies predicted recovery probabilities.
-
-The Governor converts those probabilities into merchant economics.
-
-For an action:
-
-```text
-Expected Merchant Value
-=
-Expected recovered contribution
--
-Expected discount cost
--
-Action execution cost
-```
-
-Incremental utility is defined as:
-
-```text
-Incremental Utility(action)
-=
-Expected Merchant Value(action)
--
-Expected Merchant Value(NO_ACTION)
-```
-
-The Governor selects the allowed action with the highest positive incremental utility.
-
-If no intervention produces positive incremental value:
-
-```text
-NO_ACTION
-```
-
-is selected.
-
----
-
-## Example Decision
-
-Example operational state:
-
-```text
-Current method: NETBANKING
-Failure category: TECHNICAL_FAILURE
-Attempt count: 2
-Prior checkouts: 1
-Prior successes: 1
-Amount ratio: 1.5
-Contact consent: True
-Customer active: False
-```
-
-Candidate evaluation:
-
-| Action | Predicted Recovery | Expected Merchant Value | Incremental Utility |
-|---|---:|---:|---:|
-| `NO_ACTION` | 70.91% | ₹372.27 | ₹0.00 |
-| `NUDGE` | 72.99% | ₹381.18 | **+₹8.90** |
-| `SWITCH_UPI` | 71.96% | ₹377.30 | +₹5.03 |
-| `SWITCH_CREDIT_CARD` | 72.65% | ₹380.92 | +₹8.65 |
-| `SWITCH_DEBIT_CARD` | 71.96% | ₹377.30 | +₹5.03 |
-| `OFFER_5` | 69.18% | ₹311.29 | **-₹60.98** |
-| `OFFER_10` | 69.18% | ₹259.41 | **-₹112.86** |
-
-The selected action is:
-
-```text
-NUDGE
-```
-
-The offer actions remain valid candidates but are economically dominated.
-
----
-
-# Policy Guardrails
-
-Policy checks are deterministic and external to the model.
-
-They currently include:
-
-```text
-maximum payment attempts
-contact consent
-customer activity
-payment-method availability
-same-method switching
-merchant offer cap
-action validity
-```
-
-Examples:
-
-```text
-contact_consent = false
-NUDGE
-→ CONTACT_CONSENT_MISSING
-```
-
-```text
-merchant offer cap = 5%
-OFFER_10
-→ MERCHANT_OFFER_CAP_EXCEEDED
-```
-
-```text
-target method unavailable
-SWITCH_METHOD
-→ TARGET_METHOD_UNAVAILABLE
-```
-
-An action can therefore be:
-
-```text
-structurally available
-policy eligible
-economically unattractive
-```
-
-These are separate states.
-
----
-
-# Decision Audit
-
-Every recovery decision is persisted together with its candidate-level evaluation.
-
-```mermaid
-flowchart TD
-
-    RC[Recovery Case]
-        --> RD[Recovery Decision]
-
-    RD --> FS[Feature Snapshot]
-    RD --> MV[Model Version]
-    RD --> CA[Chosen Action]
-
-    RD --> DAS[Decision Action Scores]
-
-    DAS --> N[NO_ACTION]
-    DAS --> U[NUDGE]
-    DAS --> S[SWITCH_*]
-    DAS --> O[OFFER_*]
-
-    N --> M[Probability / Uplift / EV / Utility]
-    U --> M
-    S --> M
-    O --> M
-```
-
-The decision record stores:
-
-```text
-decision ID
-recovery case ID
-prediction time
-model version
-proposed action
-feature snapshot
-explanation
-```
-
-Each candidate score stores:
-
-```text
-action type
-policy eligibility
-ineligibility reason
-predicted recovery probability
-uplift
-expected incremental utility
-payment processing cost
-action cost
-discount cost
-expected merchant value
-```
-
----
-
-## Transactional Persistence
-
-A decision and all of its candidate scores are stored in one PostgreSQL transaction.
-
-```text
-BEGIN
-
-INSERT recovery_decision
-INSERT candidate score
-INSERT candidate score
-INSERT candidate score
-...
-
-COMMIT
-```
-
-If any candidate write fails:
-
-```text
-ROLLBACK
-```
-
-No partial audit record is retained.
-
----
-
-# Execution Safety
-
-A selected action does not immediately imply execution.
-
-The selected action first enters:
-
-```text
-PENDING
-```
-
-Immediately before execution, payment truth is evaluated again.
-
-```mermaid
-flowchart TD
-
-    A[Chosen Recovery Action]
-        --> B[PENDING]
-
-    B --> C[Recheck Financial Truth]
-
-    C -->|UNPAID| D[EXECUTED]
-
-    C -->|PAID| E[BLOCKED]
-    E --> F[ORDER_ALREADY_PAID_BEFORE_EXECUTION]
-
-    C -->|UNCERTAIN| G[BLOCKED]
-    G --> H[PAYMENT_STATE_UNCERTAIN_BEFORE_EXECUTION]
-```
-
-This protects against race conditions where the customer completes payment after a recovery decision has already been created.
-
-The current execution states include:
-
-```text
-PENDING
-EXECUTED
-BLOCKED
-NOT_REQUIRED
-```
-
----
-
-# Recovery Outcomes
-
-Execution does not prove recovery.
-
-The following relationship is intentionally invalid:
-
-```text
-EXECUTED
-→ assume RECOVERED
-```
-
-A successful recovery requires a confirmed `CAPTURED` payment.
-
-```mermaid
-flowchart TD
-
-    A[Recovery Action Executed]
-        --> B[Subsequent Payment Attempt]
-
-    B --> C[Payment Event]
-
-    C -->|FAILED| D[Not Recovered]
-    C -->|AUTHORIZED| E[Unresolved]
-    C -->|CAPTURED| F[Verify Payment Relationship]
-
-    F --> G{Same Order?}
-
-    G -->|No| H[Reject Attribution]
-    G -->|Yes| I[Record RECOVERED Outcome]
-
-    I --> J[Close Recovery Case]
-```
-
-Before recording recovery, the service verifies that:
-
-```text
-the payment belongs to the recovery order
-the action belongs to the recovery decision
-the action was executed
-the latest payment event is CAPTURED
-```
-
-The recovery case is then closed with:
-
-```text
-status = CLOSED
-closure_reason = RECOVERED
-```
-
----
-
-# Database Architecture
-
-PostgreSQL stores both operational payment state and recovery audit history.
-
-## Entity Relationship Diagram
-
-```mermaid
-erDiagram
-
-    CUSTOMERS ||--o{ ORDERS : places
-
-    ORDERS ||--o{ PAYMENTS : contains
-
-    PAYMENTS ||--o{ PAYMENT_EVENTS : produces
-
-    ORDERS ||--o{ RECOVERY_CASES : opens
-
-    RECOVERY_CASES ||--o{ RECOVERY_DECISIONS : contains
-
-    RECOVERY_DECISIONS ||--o{ DECISION_ACTION_SCORES : evaluates
-
-    RECOVERY_DECISIONS ||--o{ RECOVERY_ACTIONS : creates
-
-    RECOVERY_ACTIONS ||--o{ RECOVERY_OUTCOMES : contributes_to
-
-    RECOVERY_CASES ||--o{ RECOVERY_OUTCOMES : resolves
-
-    PAYMENTS ||--o{ RECOVERY_OUTCOMES : confirms
-```
-
-The schema is versioned at:
-
-```text
-database/schema.sql
-```
-
----
-
-## Core Tables
-
-| Table | Responsibility |
-|---|---|
-| `customers` | Customer identity and consent |
-| `orders` | Merchant orders |
-| `payments` | Payment attempts and materialized state |
-| `payment_events` | Timestamped payment-event history |
-| `recovery_cases` | Recovery workflow lifecycle |
-| `recovery_decisions` | Governor decisions and feature snapshots |
-| `decision_action_scores` | Candidate-level model/economic scores |
-| `recovery_actions` | Execution state |
-| `recovery_outcomes` | Verified payment recovery |
-
----
-
-## Relational Traceability
-
-A successful recovery is traceable through:
-
-```text
-Order
-  ↓
-Recovery Case
-  ↓
-Recovery Decision
-  ↓
-Recovery Action
-  ↓
-Recovery Outcome
-  ↓
-Captured Payment
-  ↓
-Payment Event
-```
-
-Example:
-
-```text
-Order
-O_SMOKE_CURRENT_2dac7042
-
-        ↓
-
-Recovery Case
-RC_8b1fb95ab949
-
-status = CLOSED
-closure_reason = RECOVERED
-
-        ↓
-
-Decision
-D_c93c5e4e554e
-
-model = s_learner_corrected_v1
-proposed_action = NUDGE
-
-        ↓
-
-Recovery Action
-A_b15cc8bd708e
-
-execution_status = EXECUTED
-
-        ↓
-
-Recovery Outcome
-OUT_558070032617
-
-outcome_type = RECOVERED
-recovered_amount_minor = 150000
-
-        ↓
-
-Payment
-P_SMOKE_RECOVERED_2dac7042
-
-method = NETBANKING
-status = CAPTURED
-
-        ↓
-
-Payment Event
-CAPTURED
-```
-
----
-
-# Evaluation Results
-
-The economic benchmark compares several recovery policies.
-
-| Strategy | Recovery Rate | Intervention Rate | Unnecessary Intervention Rate | Incremental Value / Failure |
+| Strategy | Recovery rate | Intervention rate | Unnecessary intervention | Incremental value / failure |
 |---|---:|---:|---:|---:|
-| `NO_ACTION` | 61.19% | 0.0% | 0.0% | ₹0.00 |
-| `BLANKET_NUDGE` | 63.89% | 37.6% | 19.15% | ₹18.00 |
-| `RULE_BASED` | 63.13% | 27.2% | 25.00% | ₹13.16 |
-| `S_LEARNER_RECOVERY_MAX` | **65.18%** | **83.2%** | **43.27%** | ₹13.17 |
-| `ECONOMIC_GOVERNOR` | **65.09%** | **67.6%** | **26.63%** | **₹25.30** |
-| `ECONOMIC_ORACLE` | 67.18% | 67.2% | 0.0% | ₹38.33 |
+| `NO_ACTION` | 61.19% | 0.0% | 0.00% | INR 0.00 |
+| `BLANKET_NUDGE` | 63.89% | 37.6% | 19.15% | INR 18.00 |
+| `RULE_BASED` | 63.13% | 27.2% | 25.00% | INR 13.16 |
+| `S_LEARNER_RECOVERY_MAX` | 65.18% | 83.2% | 43.27% | INR 13.17 |
+| `ECONOMIC_GOVERNOR` | 65.09% | 67.6% | 26.63% | INR 25.30 |
+| `ECONOMIC_ORACLE` | 67.18% | 67.2% | 0.00% | INR 38.33 |
 
-The key comparison is between the recovery-maximizing policy and the economic Governor.
+Compared with Recovery-Max ML, the Economic Governor delivers:
 
-```text
-S_LEARNER_RECOVERY_MAX
+- only **0.09 percentage points** less recovery;
+- approximately **1.92×** incremental merchant value per failure;
+- **15.6 percentage points** lower intervention; and
+- **16.64 percentage points** lower unnecessary intervention.
 
-Recovery rate                  65.18%
-Intervention rate              83.20%
-Unnecessary intervention       43.27%
-Incremental value / failure    ₹13.17
-```
+These are controlled offline evaluation results, not live merchant metrics. `ECONOMIC_ORACLE` is a hindsight upper bound used for regret measurement; it is not a deployable policy.
 
-```text
-ECONOMIC_GOVERNOR
+### Merchant threshold modes
 
-Recovery rate                  65.09%
-Intervention rate              67.60%
-Unnecessary intervention       26.63%
-Incremental value / failure    ₹25.30
-```
+The canonical threshold evaluation exposes policy modes, not separate ML models:
 
-The economic Governor gives up approximately:
+| Mode | Minimum incremental value | Recovery | Intervention | Unnecessary | Incremental value / failure |
+|---|---:|---:|---:|---:|---:|
+| Value Max (`T=0`) | INR 0 | 65.09% | 67.6% | 26.63% | INR 25.30 |
+| Balanced (`T=5`) | INR 5 | 64.33% | 43.6% | 18.35% | INR 22.38 |
+| Conservative (`T=10`) | INR 10 | 63.18% | 26.0% | 18.46% | INR 17.73 |
 
-```text
-0.09 percentage points
-```
+The threshold is the minimum predicted incremental merchant value required before an intervention may be selected.
 
-of raw recovery rate while substantially reducing intervention intensity and increasing expected incremental merchant value.
+## Payment-safety invariants
 
----
-
-# Merchant Modes
-
-The Governor supports a minimum incremental-utility threshold.
-
-This controls how aggressively interventions are permitted.
-
-| Mode | Minimum Incremental Utility | Recovery Rate | Intervention Rate | Incremental Value / Failure |
-|---|---:|---:|---:|---:|
-| **Value Max** | ₹0 | 65.09% | 67.6% | ₹25.30 |
-| **Balanced** | ₹5 | 64.33% | 43.6% | ₹22.38 |
-| **Conservative** | ₹10 | 63.18% | 26.0% | ₹17.73 |
-
-```mermaid
-flowchart LR
-
-    A[Merchant Policy]
-        --> B{Utility Threshold}
-
-    B --> C[Value Max]
-    B --> D[Balanced]
-    B --> E[Conservative]
-
-    C --> F[Higher intervention coverage]
-    D --> G[Moderate intervention coverage]
-    E --> H[Higher-value interventions only]
-```
-
----
-
-# Feature Engineering
-
-The operational feature builder intentionally avoids simulator-only information.
-
-## Historical success and failure
-
-Prior orders are classified as:
+Financial truth always outranks prediction:
 
 ```text
-successful
-failed
-uncertain
+CAPTURED → PAID → STOP
+CREATED / AUTHORIZED → UNCERTAIN → WAIT_FOR_TRUTH
 ```
 
-Uncertain history is counted as neither success nor failure.
-
----
-
-## Payment-method history
-
-The system maintains per-method historical features including:
+Recovery eligibility remains deliberately conservative:
 
 ```text
-attempt count
-success count
-success rate
+0 confirmed failures → NO_CONFIRMED_FAILURE
+1 confirmed failure  → ALLOW_NATURAL_RETRY
+2+ confirmed failures → may become recovery eligible
 ```
 
-These features were evaluated both as raw historical features and candidate-relative features.
+The implementation enforces:
 
----
+- **One active case per order:** PostgreSQL partial unique index `uq_one_active_recovery_case_per_order`.
+- **Idempotent events:** `provider_event_id` is unique; exact redelivery is a safe no-op and conflicting reuse is rejected.
+- **Ordered truth:** late or stale events cannot regress terminal `CAPTURED` state.
+- **Temporal safety:** historical inputs require `payment.created_at < T`, `event_time < T`, and `received_at < T`.
+- **Transactional audit:** feature snapshot, model version, selected action, and every candidate score commit or roll back together.
+- **Concurrency-safe action transition:** only one worker can move an action out of `PENDING`.
+- **Pre-execution veto:** payment truth is checked again before an intervention executes.
+- **Payment-backed attribution:** `RECOVERED` requires relational links to the recovery case, action, payment, and confirmed `CAPTURED` evidence.
 
-## Amount Ratio
+Decision does not imply execution. Execution does not imply recovery.
 
-The original simulator used a hidden variable representing typical customer order value.
+## Product experience
 
-That dependency was removed.
+The Streamlit product has five connected pages:
 
-The production-compatible feature is:
+- **Overview** — business value, current persisted recovery activity, and the controlled Governor benchmark.
+- **Recovery Lab** — deep inspection of one payment journey, counterfactual candidate matrix, Governor decision, and lifecycle audit.
+- **Merchant Ops** — many persisted recovery cases, operational filters, distributions, and order drill-down.
+- **Economics & Policy** — controlled strategy benchmarks and merchant utility-threshold tradeoffs.
+- **System** — architecture, authority boundaries, model action space, enforced guarantees, and known limitations.
 
-```text
-current order amount
-/
-median observed prior order amount
-```
+## API
 
-When no history exists:
+The implemented FastAPI routes are:
 
-```text
-amount_ratio = 1.0
-```
+| Method | Route | Purpose |
+|---|---|---|
+| `GET` | `/health` | API, database, and model health |
+| `POST` | `/api/payment-events` | Idempotently ingest payment evidence and synchronize payment state |
+| `POST` | `/api/demo/scenarios` | Create an explicit deterministic demonstration journey |
+| `POST` | `/api/orders/{order_id}/recovery` | Run the recovery workflow for an order |
+| `GET` | `/api/orders/{order_id}/recovery` | Read the complete persisted recovery view |
+| `GET` | `/api/orders/{order_id}/timeline` | Read the payment and recovery lifecycle timeline |
+| `GET` | `/api/recovery-cases` | List persisted recovery cases |
+| `GET` | `/api/metrics` | Read operational metrics and canonical benchmark artifacts |
+| `POST` | `/api/recovery-cases/{case_id}/outcome` | Attribute a payment-backed recovery outcome |
 
----
+Interactive OpenAPI documentation is available at `http://127.0.0.1:8000/docs` while FastAPI is running.
 
-# Temporal Leakage Protection
+## Quickstart
 
-The decision builder reconstructs only information that existed before the decision timestamp.
+### Prerequisites
 
-For a decision at time `T`:
+- Python 3.14 (the verified environment uses Python 3.14.7)
+- PostgreSQL 18 (the tracked schema was exported from PostgreSQL 18.6)
+- `psql` available in `PATH`, or the full path to the PostgreSQL client
 
-```text
-payment.created_at < T
-event.event_time < T
-event.received_at < T
-```
+Run all commands from the repository root.
 
-Future retries and future payment outcomes are excluded.
-
-Example:
-
-```text
-10:00  FAILED
-10:15  recovery decision
-10:30  CAPTURED
-```
-
-At `10:15`, the `10:30` capture is not part of model state.
-
-This applies to:
-
-```text
-prior success counts
-prior failure counts
-payment-method history
-payment event state
-order history
-```
-
----
-
-# Model Experiments
-
-The repository contains multiple treatment-effect and policy-learning experiments.
-
-Models evaluated include:
-
-```text
-S-Learner
-T-Learner
-IPW S-Learner
-Doubly Robust Learner
-```
-
-The current production runtime uses the corrected baseline S-Learner.
-
----
-
-## Raw Payment-Method History Experiment
-
-Twelve additional features were evaluated:
-
-```text
-prior_upi_attempt_count
-prior_upi_success_count
-prior_upi_success_rate
-
-prior_credit_card_attempt_count
-prior_credit_card_success_count
-prior_credit_card_success_rate
-
-prior_debit_card_attempt_count
-prior_debit_card_success_count
-prior_debit_card_success_rate
-
-prior_netbanking_attempt_count
-prior_netbanking_success_count
-prior_netbanking_success_rate
-```
-
-The representation improved some counterfactual metrics while degrading others.
-
-It was not promoted to the production model.
-
----
-
-## Candidate-Relative History Experiment
-
-A candidate-relative representation was also evaluated:
-
-```text
-target_method_attempt_count
-target_method_success_count
-target_method_success_rate
-```
-
-The representation improved uplift MAE and correlation slightly but did not improve overall policy performance sufficiently.
-
-The corrected baseline S-Learner therefore remains the runtime model.
-
----
-
-# Repository Structure
-
-```text
-recovery_governer/
-│
-├── backend/
-│   ├── data_access/
-│   │   ├── payments.py
-│   │   └── recovery.py
-│   │
-│   ├── services/
-│   │   ├── payment_truth.py
-│   │   ├── recovery_eligibility.py
-│   │   ├── recovery_state.py
-│   │   ├── recovery_candidates.py
-│   │   ├── recovery_decision.py
-│   │   ├── recovery_audit.py
-│   │   ├── recovery_execution.py
-│   │   ├── recovery_outcome.py
-│   │   ├── recovery_engine.py
-│   │   └── recovery_factory.py
-│   │
-│   └── db.py
-│
-├── database/
-│   └── schema.sql
-│
-├── data/
-│   ├── historical_recovery.csv
-│   ├── economic_benchmark_summary.csv
-│   ├── governor_evaluation.csv
-│   ├── governor_threshold_evaluation.csv
-│   └── governor_threshold_summary.csv
-│
-├── ml/
-│   ├── features.py
-│   ├── action_features.py
-│   ├── s_learner.py
-│   ├── t_learner.py
-│   ├── ipw_s_learner.py
-│   └── dr_learner.py
-│
-├── models/
-│   └── s_learner.joblib
-│
-├── policy/
-│   ├── economics.py
-│   └── governor.py
-│
-├── scripts/
-│   ├── generate_historical_data.py
-│   ├── train_s_learner.py
-│   ├── evaluate_counterfactual_models.py
-│   ├── evaluate_governor_economics.py
-│   ├── evaluate_governor_thresholds.py
-│   ├── evaluate_s_feature_experiment.py
-│   └── smoke_operational_recovery.py
-│
-├── simulator/
-│   ├── models.py
-│   ├── decision_state.py
-│   └── historical_dataset.py
-│
-├── tests/
-│
-├── .env.example
-├── requirements.txt
-├── CHECKPOINT.md
-└── README.md
-```
-
----
-
-# Environment
-
-The current tested development environment uses:
-
-```text
-Python      3.14.7
-PostgreSQL  18.x
-```
-
-Core Python dependencies:
-
-```text
-joblib==1.6.0
-numpy==2.5.2
-pandas==3.0.5
-psycopg==3.3.4
-psycopg-binary==3.3.4
-pytest==9.1.1
-python-dotenv==1.2.3
-scikit-learn==1.9.0
-```
-
----
-
-# Installation
-
-## Clone the repository
+### 1. Clone and create an environment
 
 ```bash
 git clone <repository-url>
 cd recovery_governer
+python -m venv .venv
 ```
 
-## Create a virtual environment
-
-### Windows PowerShell
+Activate it:
 
 ```powershell
-python -m venv .venv
+# Windows PowerShell
 .\.venv\Scripts\Activate.ps1
 ```
 
-### Linux / macOS
-
 ```bash
-python -m venv .venv
+# Linux / macOS
 source .venv/bin/activate
 ```
 
-## Install dependencies
+Install the pinned dependencies:
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+python -m pip check
 ```
 
-Verify dependency consistency:
+### 2. Configure PostgreSQL
 
-```bash
-pip check
-```
-
----
-
-# Database Setup
-
-## Create the database
+Create the database:
 
 ```sql
 CREATE DATABASE razorpay_recovery;
 ```
 
-## Configure environment variables
+Copy the environment template and replace its placeholders with local credentials:
 
-Copy:
-
-```text
-.env.example
+```powershell
+# Windows PowerShell
+Copy-Item .env.example .env
 ```
 
-to:
-
-```text
-.env
+```bash
+# Linux / macOS
+cp .env.example .env
 ```
 
-Example:
-
-```env
-PGHOST=localhost
-PGPORT=5432
-PGDATABASE=razorpay_recovery
-PGUSER=postgres
-PGPASSWORD=your_postgres_password
-```
-
-The actual `.env` file should not be committed.
-
----
-
-## Restore the schema
-
-If `psql` is available in `PATH`:
+Initialize the schema:
 
 ```bash
 psql -U postgres -d razorpay_recovery -f database/schema.sql
 ```
 
-On Windows with PostgreSQL 18:
+### 3. Start the applications
 
-```powershell
-& "C:\Program Files\PostgreSQL\18\bin\psql.exe" `
--U postgres `
--d razorpay_recovery `
--f database\schema.sql
-```
-
----
-
-# Running the Pipeline
-
-## Generate historical recovery data
+In one terminal:
 
 ```bash
-python -m scripts.generate_historical_data
+python -m uvicorn backend.api.main:app --host 127.0.0.1 --port 8000
 ```
 
-The canonical generated dataset contains approximately:
-
-```text
-20,000 decision opportunities
-45 columns
-```
-
-and is stored at:
-
-```text
-data/historical_recovery.csv
-```
-
----
-
-## Train the production S-Learner
+In another terminal:
 
 ```bash
-python -m scripts.train_s_learner
+python -m streamlit run dashboard/app.py --server.port 8501
 ```
 
-The runtime model is stored at:
+Open:
+
+- Streamlit UI: `http://127.0.0.1:8501`
+- FastAPI: `http://127.0.0.1:8000`
+- Swagger UI: `http://127.0.0.1:8000/docs`
+
+The dashboard uses `RECOVERY_API_BASE_URL` from `.env` and otherwise defaults to `http://127.0.0.1:8000`.
+
+## Project structure
 
 ```text
-models/s_learner.joblib
+backend/
+  api/          FastAPI routes, schemas, application boundary, read models
+  data_access/  PostgreSQL persistence and transactional state transitions
+  services/     payment truth, eligibility, decision, audit, execution, outcome
+dashboard/      Streamlit application, pages, navigation, and shared visual language
+ml/             production and experimental causal learners and feature pipelines
+models/         tracked trained model artifacts
+policy/         merchant economics and deterministic Recovery Governor
+simulator/      synthetic journeys and counterfactual outcome environment
+scripts/        dataset, training, evaluation, inspection, and smoke commands
+data/           canonical dataset and benchmark artifacts
+database/       reproducible PostgreSQL schema
+tests/          unit, integration, transactional, concurrency, API, and UI helpers
 ```
 
----
+## Testing
 
-## Counterfactual model evaluation
-
-```bash
-python -m scripts.evaluate_counterfactual_models
-```
-
----
-
-## Economic policy benchmark
-
-```bash
-python -m scripts.evaluate_governor_economics
-```
-
-Generated outputs include:
+The final verified repository suite is:
 
 ```text
-data/economic_benchmark_summary.csv
-data/governor_evaluation.csv
+231 passed, 1 existing dependency deprecation warning
 ```
 
----
-
-## Merchant threshold evaluation
+Run it with:
 
 ```bash
-python -m scripts.evaluate_governor_thresholds
+python -m compileall -q backend ml policy simulator scripts tests dashboard
+python -m pytest -q
 ```
 
-Generated outputs include:
+Coverage includes payment truth, event ingestion and idempotency, event ordering, temporal safety, eligibility and natural retry, counterfactual prediction, Governor economics, workflow-failure preservation, transactional audit, concurrency, API behavior, dashboard helpers, and payment-backed outcome attribution.
 
-```text
-data/governor_threshold_summary.csv
-data/governor_threshold_evaluation.csv
-```
-
----
-
-# Testing
-
-Run the full suite:
-
-```bash
-pytest -q
-```
-
-The test suite covers:
-
-```text
-database access
-payment truth
-historical truth reconstruction
-recovery eligibility
-natural retry
-temporal leakage
-decision-state construction
-payment-method history
-feature engineering
-candidate generation
-S-Learner behavior
-Governor policy rules
-economic decision logic
-decision audit
-transaction rollback
-execution state
-pre-execution payment truth checks
-payment attribution
-recovery outcome recording
-case closure
-workflow orchestration
-```
-
-Tests use unique identifiers rather than fixed permanent database rows so repeated runs do not violate database uniqueness constraints.
-
----
-
-# Operational Smoke Test
-
-A complete operational path can be exercised with:
+An end-to-end operational smoke is also available:
 
 ```bash
 python -m scripts.smoke_operational_recovery
 ```
 
-The smoke scenario performs the following sequence:
+It uses PostgreSQL, the tracked production model, the real Governor, decision audit persistence, execution-state transitions, payment-event truth, outcome attribution, and case closure.
 
-```mermaid
-flowchart TD
+## Provider boundary
 
-    A[Create Customer and Order]
-        --> B[Create Failed Payment Attempt]
+The recovery core is provider-agnostic. Production payment-provider webhooks can be adapted into the hardened payment-event ingestion contract.
 
-    B --> C[Create Second Failed Attempt]
+Provider-specific webhook adapters, provider test modes, and live payment-provider integrations are outside the current implementation.
 
-    C --> D[Financial Truth = UNPAID]
+## Known limitations and production hardening
 
-    D --> E[Recovery Eligible]
+- **Training/serving alignment:** much of the synthetic training population was generated closer to the first-failure decision point, while operational eligibility requires multiple confirmed failures. The safety gate is intentionally unchanged.
+- **Historical failure-reason replay:** event history reconstructs payment status at decision time, but `failure_reason` is materialized on the payment row and cannot be replayed perfectly across mutations.
+- **Runtime signal sourcing:** payment-method availability, observed rail health, and customer activity must come from provider or application infrastructure in a production integration.
+- **Payment accounting:** recovered value currently represents captured order value, not independently verified settlement value with fees, refunds, and net settlement.
+- **External side effects:** payment-state and audit guarantees are implemented. Before connecting irreversible external messaging or provider side effects, execution should move behind a transactional claim/outbox boundary with an explicit lock-order design to fully close the payment-versus-action race.
+- **Causal validation:** benchmark results use the synthetic counterfactual environment. Production evaluation requires logged interventions and experimental or defensible quasi-experimental data.
 
-    E --> F[Open Recovery Case]
+## Repository artifacts
 
-    F --> G[Build Observable State]
+The runtime and evaluation paths depend on these tracked canonical assets:
 
-    G --> H[Score Recovery Actions]
+- [`models/s_learner.joblib`](models/s_learner.joblib) — production S-Learner artifact
+- [`data/historical_recovery.csv`](data/historical_recovery.csv) — canonical historical training dataset
+- [`data/economic_benchmark_summary.csv`](data/economic_benchmark_summary.csv) — policy comparison summary
+- [`data/governor_evaluation.csv`](data/governor_evaluation.csv) — detailed Governor evaluation
+- [`data/governor_threshold_summary.csv`](data/governor_threshold_summary.csv) — merchant threshold summary
+- [`data/governor_threshold_evaluation.csv`](data/governor_threshold_evaluation.csv) — detailed threshold evaluation
+- [`database/schema.sql`](database/schema.sql) — reproducible PostgreSQL schema
 
-    H --> I[Governor Decision]
-
-    I --> J[Persist Audit]
-
-    J --> K[Create Recovery Action]
-
-    K --> L[Recheck Financial Truth]
-
-    L --> M[Execute Recovery Action]
-
-    M --> N[Create Subsequent Payment]
-
-    N --> O[CAPTURED Event]
-
-    O --> P[Financial Truth = PAID]
-
-    P --> Q[Record RECOVERED Outcome]
-
-    Q --> R[Close Recovery Case]
-```
-
-The smoke path uses:
-
-```text
-real PostgreSQL persistence
-the production S-Learner artifact
-the Recovery Governor
-decision audit persistence
-execution-state persistence
-payment-event truth
-outcome attribution
-case closure
-```
-
----
-
-# Engineering Guarantees
-
-## Payment truth has priority over prediction
-
-```text
-PAID
-→ no intervention
-
-UNCERTAIN
-→ no intervention
-```
-
----
-
-## First failure receives a natural-retry window
-
-```text
-first confirmed failure
-→ ALLOW_NATURAL_RETRY
-```
-
-Recovery intervention begins only after the configured eligibility threshold is satisfied.
-
----
-
-## Future information is excluded
-
-Historical decision state is reconstructed only from information observable before the decision time.
-
----
-
-## Decision audit is atomic
-
-The decision header and all candidate scores are persisted together or not persisted at all.
-
----
-
-## Decision and execution are separate
-
-An approved action may still be blocked before execution.
-
----
-
-## Payment truth is rechecked immediately before execution
-
-This protects against recovery actions being sent after natural payment completion.
-
----
-
-## Execution does not imply recovery
-
-Only a confirmed `CAPTURED` payment can create a `RECOVERED` outcome.
-
----
-
-## Recovery outcomes are relationally linked to payment evidence
-
-The outcome references:
-
-```text
-recovery case
-recovery action
-captured payment
-```
-
-through PostgreSQL foreign keys.
-
----
-
-# Known Limitations
-
-## Training and serving eligibility alignment
-
-The operational recovery workflow requires multiple confirmed failures before opening a recovery case.
-
-A significant portion of the synthetic training population was generated around the first-failure decision opportunity.
-
-The operational safety gate has intentionally not been weakened to match the training population.
-
-A future dataset generation version should align the training decision point exactly with production eligibility.
-
----
-
-## Payment amount representation
-
-The current `payments` table does not independently store provider-confirmed charged amount.
-
-`recovered_amount_minor` therefore currently represents recovered order value after a confirmed captured payment.
-
-A production payment model should store payment-level financial fields such as:
-
-```text
-charged amount
-refunded amount
-settled amount
-currency
-processor fee
-```
-
----
-
-## Failure-reason history
-
-`failure_reason` currently exists on the materialized payment row rather than being independently timestamped on every payment event.
-
-Historical replay can therefore reconstruct payment status accurately from events but cannot perfectly reconstruct every historical failure-reason mutation.
-
----
-
-## Runtime rail-health signals
-
-Payment-method availability and observed rail health are currently supplied as explicit runtime signals.
-
-A production integration would source these from live payment infrastructure telemetry.
-
----
-
-## Synthetic counterfactual environment
-
-Counterfactual policy evaluation currently relies on the simulator.
-
-Production causal evaluation would require real intervention logging and experimental or quasi-experimental data.
-
-Potential extensions include:
-
-```text
-randomized treatment assignment
-logged treatment propensity
-calibration monitoring
-policy drift monitoring
-off-policy evaluation
-merchant-segment analysis
-```
-
----
-
-# Planned Extensions
-
-The existing recovery engine is structured to support an API and operational observability layer.
-
-The intended service architecture is:
-
-```mermaid
-flowchart TD
-
-    A[Payment Provider / Event Producer]
-        --> B[Event Ingestion API]
-
-    B --> C[Payment Event Store]
-
-    C --> D[Financial Truth Service]
-
-    D --> E[Recovery Engine]
-
-    E --> F[Decision Service]
-
-    F --> G[Recovery Governor]
-
-    G --> H[Execution Service]
-
-    E --> I[Recovery Timeline]
-
-    F --> J[Candidate Score API]
-
-    G --> K[Policy Explanation API]
-
-    H --> L[Action State API]
-
-    C --> M[Outcome Service]
-
-    M --> N[Portfolio Metrics]
-
-    I --> O[Operational Interface]
-    J --> O
-    K --> O
-    L --> O
-    N --> O
-```
-
-Future service work includes:
-
-```text
-FastAPI endpoints
-payment-event ingestion
-idempotent provider-event processing
-live recovery-case timelines
-candidate-score endpoints
-policy explanation endpoints
-merchant policy configuration
-portfolio recovery metrics
-revenue-at-risk metrics
-incremental-value reporting
-execution-state monitoring
-```
-
----
-
-# Streamlit Recovery Lab
-
-Run FastAPI and Streamlit in separate terminals from the repository root:
-
-```bash
-python -m uvicorn backend.api.main:app
-streamlit run dashboard/app.py
-```
-
-The dashboard uses `RECOVERY_API_BASE_URL` when set and otherwise connects to
-`http://127.0.0.1:8000`. It communicates with the recovery system only through
-the HTTP API.
-
----
-
-# Architecture Summary
-
-```mermaid
-flowchart TD
-
-    A[Payment Events]
-
-    A --> B[Financial Truth]
-
-    B -->|PAID| Z1[STOP]
-    B -->|UNCERTAIN| Z2[WAIT FOR TRUTH]
-    B -->|UNPAID| C[Recovery Eligibility]
-
-    C -->|First Failure| Z3[NATURAL RETRY]
-    C -->|Multiple Failures| D[Recovery Case]
-
-    D --> E[Observable State]
-
-    E --> F[S-Learner]
-
-    F --> G[Counterfactual Candidate Probabilities]
-
-    G --> H[Merchant Economics]
-
-    H --> I[Recovery Governor]
-
-    I --> J[Policy Guardrails]
-
-    J --> K[Decision Audit]
-
-    K --> L[Recovery Action]
-
-    L --> M[Pre-Execution Financial Truth Check]
-
-    M -->|PAID| Z4[BLOCK]
-    M -->|UNCERTAIN| Z5[BLOCK]
-    M -->|UNPAID| N[EXECUTE]
-
-    N --> O[Payment Retry]
-
-    O --> P[Payment Event]
-
-    P -->|CAPTURED| Q[RECOVERY OUTCOME]
-
-    Q --> R[CLOSE RECOVERY CASE]
-```
-
----
-
-# Summary
-
-The system combines:
-
-```text
-payment truth
-+
-time-safe feature reconstruction
-+
-counterfactual recovery prediction
-+
-merchant economics
-+
-deterministic policy
-+
-transactional audit
-+
-execution safety
-+
-payment-linked outcomes
-```
-
-to implement a recovery policy whose objective is not simply to increase payment completion, but to increase **justified incremental merchant value** while preserving payment-state correctness.
+The public repository contains no real credentials. Copy [`.env.example`](.env.example) to an ignored `.env` file and supply local values before running the applications.
