@@ -18,6 +18,7 @@ from dashboard.components.metric_card import metric_card
 from dashboard.components.section_header import section_header
 from dashboard.components.status_badge import status_badge, tone_for_status
 from dashboard.components.timeline import render_timeline
+from dashboard.navigation import INSPECT_ORDER_KEY, selected_order_id
 
 
 PAYMENT_SITUATIONS = {
@@ -57,6 +58,7 @@ SESSION_DEFAULTS = {
     "lab_case_id": None,
     "lab_decision_id": None,
     "lab_action_id": None,
+    "lab_inspected_order_id": None,
 }
 
 
@@ -154,6 +156,63 @@ def _store_identifiers():
 def _show_api_error(error):
     st.error(str(error))
     st.caption("Check that FastAPI is running, then retry the last action.")
+
+
+def _load_inspected_order(client, order_id):
+    recovery = client.get_recovery(order_id)
+    decision = recovery.get("decision") or {}
+    feature_snapshot = decision.get("feature_snapshot") or {}
+    workflow = {
+        "workflow_state": "DECIDED" if decision else "NO_DECISION",
+        "reason": "PERSISTED_CASE_INSPECTION",
+        "case": recovery.get("recovery_case"),
+        "decision": recovery.get("decision"),
+        "chosen_action": decision.get("proposed_action"),
+        "execution_action": recovery.get("action"),
+        "candidate_action_scores": recovery.get("candidate_action_scores") or [],
+    }
+    st.session_state.lab_scenario = None
+    st.session_state.lab_workflow = workflow
+    st.session_state.lab_recovery = recovery
+    st.session_state.lab_timeline = client.get_timeline(order_id)
+    st.session_state.lab_decision_snapshot = {
+        "customer": {"contact_consent": feature_snapshot.get("contact_consent")},
+        "runtime_signals": {"customer_active": feature_snapshot.get("customer_active")},
+        # A persisted decision can only be created after the authoritative UNPAID gate.
+        "financial_truth": "UNPAID" if decision else None,
+        "eligibility_reason": "PERSISTED_DECISION",
+        "chosen_action": decision.get("proposed_action"),
+        "execution_status": (recovery.get("action") or {}).get("execution_status"),
+    }
+    st.session_state.lab_order_id = order_id
+    st.session_state.lab_case_id = (recovery.get("recovery_case") or {}).get(
+        "recovery_case_id"
+    )
+    st.session_state.lab_decision_id = decision.get("decision_id")
+    st.session_state.lab_action_id = (recovery.get("action") or {}).get("action_id")
+    st.session_state.lab_inspected_order_id = order_id
+
+
+def render_inspected_order_context():
+    recovery = st.session_state.lab_recovery or {}
+    recovery_case = recovery.get("recovery_case") or {}
+    action = recovery.get("action") or {}
+    st.markdown(
+        '<div class="inspection-banner"><div><span>PERSISTED CASE INSPECTION</span>'
+        f'<strong>{escape(str(st.session_state.lab_order_id))}</strong></div>'
+        f'<div><span>CURRENT PAYMENT TRUTH</span><strong>{escape(str(recovery.get("financial_truth") or "—"))}</strong></div>'
+        f'<div><span>CASE</span><strong>{escape(str(recovery_case.get("status") or "—"))}</strong></div>'
+        f'<div><span>EXECUTION</span><strong>{escape(str(action.get("execution_status") or "—"))}</strong></div></div>',
+        unsafe_allow_html=True,
+    )
+    st.caption(
+        "Loaded read-only from Merchant Ops. Candidate evidence stays in Recovery Lab; viewing it does not execute or mutate recovery state."
+    )
+    if st.button("RETURN TO SCENARIO BUILDER", key="lab_leave_inspection"):
+        st.session_state.pop(INSPECT_ORDER_KEY, None)
+        for key, value in SESSION_DEFAULTS.items():
+            st.session_state[key] = value
+        st.rerun()
 
 
 def _humanize(value):
@@ -352,7 +411,11 @@ def render_decision_snapshot():
     section_header(
         "04 · Decision snapshot",
         "At decision time",
-        "Frozen in this UI session before any later CAPTURED payment changes current truth.",
+        (
+            "Loaded from the persisted decision audit. UNPAID is guaranteed by the decision eligibility invariant."
+            if st.session_state.lab_inspected_order_id
+            else "Frozen in this UI session before any later CAPTURED payment changes current truth."
+        ),
     )
     columns = st.columns(4)
     cards = [
@@ -491,11 +554,15 @@ def render_current_outcome(client):
     st.warning(
         f"Action status: {action.get('execution_status', '—')}. Execution alone is not recovery."
     )
-    if action.get("execution_status") == "EXECUTED" and st.button(
+    if (
+        action.get("execution_status") == "EXECUTED"
+        and scenario.get("payment_ids")
+        and st.button(
         "SIMULATE FUTURE CAPTURED PAYMENT",
         type="primary",
         width="stretch",
         key="simulate_capture",
+        )
     ):
         payment_id = scenario["payment_ids"][-1]
         try:
@@ -533,6 +600,25 @@ def render(client):
         '<div class="page-subtitle">Understand why one payment journey received one recovery decision—and how recovered revenue is verified.</div>',
         unsafe_allow_html=True,
     )
+    inspection_order = selected_order_id(st.session_state)
+    if (
+        inspection_order
+        and st.session_state.lab_inspected_order_id != inspection_order
+    ):
+        try:
+            _load_inspected_order(client, inspection_order)
+        except RecoveryAPIError as error:
+            _show_api_error(error)
+            return
+    if inspection_order:
+        render_inspected_order_context()
+        render_decision_snapshot()
+        render_ai_model()
+        render_governance_pipeline()
+        render_governor_and_audit()
+        render_current_outcome(client)
+        render_timeline_section()
+        return
     render_demo_context()
     render_configuration(client)
     render_checkout_context()

@@ -13,6 +13,22 @@ from dashboard.components.action_matrix import (
 )
 from dashboard.components.timeline import build_timeline_rows
 from dashboard.config import load_config, normalize_base_url
+from dashboard.navigation import (
+    INSPECT_ORDER_KEY,
+    PAGE_KEY,
+    REQUESTED_PAGE_KEY,
+    apply_pending_navigation,
+    initialize_navigation,
+    navigate_to,
+    selected_order_id,
+)
+from dashboard.pages.merchant_ops import (
+    action_group,
+    available_case_filters,
+    filter_recovery_cases,
+    outcome_group,
+)
+from dashboard.pages.overview import benchmark_summary, prepare_overview_data
 from dashboard.pages.recovery_lab import (
     capture_decision_snapshot,
     chosen_score,
@@ -233,3 +249,94 @@ def test_same_second_timeline_uses_merchant_lifecycle_order():
 def test_streamlit_builtin_page_navigation_is_disabled():
     config = tomllib.loads(Path(".streamlit/config.toml").read_text(encoding="utf-8"))
     assert config["client"]["showSidebarNavigation"] is False
+
+
+def test_overview_keeps_live_metrics_separate_from_canonical_benchmark():
+    metrics = {
+        "total_recovery_cases": 12,
+        "open_cases": 7,
+        "closed_cases": 5,
+        "recovered_cases": 4,
+        "recovered_order_value_minor": 450_000,
+        "action_counts": {"NUDGE": 3},
+        "canonical_benchmarks": [
+            {
+                "policy": "S_LEARNER_RECOVERY_MAX",
+                "recovery_rate": "0.65176",
+                "intervention_rate": "0.832",
+                "unnecessary_intervention_rate": "0.4326923076923077",
+                "incremental_value_minor_per_failure": "1316.887936",
+            },
+            {
+                "policy": "ECONOMIC_GOVERNOR",
+                "recovery_rate": "0.65088",
+                "intervention_rate": "0.676",
+                "unnecessary_intervention_rate": "0.26627218934911245",
+                "incremental_value_minor_per_failure": "2529.950176",
+            },
+        ],
+    }
+
+    page_data = prepare_overview_data(metrics)
+    summary = benchmark_summary(page_data["benchmark"])
+
+    assert page_data["live"]["total_recovery_cases"] == 12
+    assert "recovery_rate" not in page_data["live"]
+    assert "total_recovery_cases" not in page_data["benchmark"]
+    assert summary["recovery_gap_pp"] == pytest.approx(0.088)
+    assert summary["recovery_max"]["incremental_value"] == pytest.approx(13.16887936)
+    assert summary["economic_governor"]["incremental_value"] == pytest.approx(25.29950176)
+
+
+def test_merchant_ops_filters_use_only_returned_case_fields():
+    cases = [
+        {
+            "recovery_case_id": "RC_OPEN",
+            "status": "OPEN",
+            "chosen_action": "SWITCH_UPI",
+            "outcome_type": None,
+            "closure_reason": None,
+        },
+        {
+            "recovery_case_id": "RC_RECOVERED",
+            "status": "CLOSED",
+            "chosen_action": "NUDGE",
+            "outcome_type": "RECOVERED",
+            "closure_reason": "RECOVERED",
+        },
+        {
+            "recovery_case_id": "RC_FAILED",
+            "status": "CLOSED",
+            "chosen_action": None,
+            "outcome_type": None,
+            "closure_reason": "DECISION_FAILED",
+        },
+    ]
+
+    filters = available_case_filters(cases)
+    assert filters["statuses"] == ["All", "CLOSED", "OPEN"]
+    assert "Not yet recovered" in filters["outcomes"]
+    assert "Decision Failed" in filters["outcomes"]
+    assert "SWITCH_METHOD" in filters["actions"]
+    assert action_group("OFFER_5") == "OFFER"
+    assert outcome_group(cases[0]) == "Not yet recovered"
+    assert [case["recovery_case_id"] for case in filter_recovery_cases(
+        cases, status="CLOSED", outcome="Recovered", action="NUDGE"
+    )] == ["RC_RECOVERED"]
+
+
+def test_cross_page_navigation_preserves_selected_order_for_recovery_lab():
+    state = {}
+    initialize_navigation(state)
+    assert state[PAGE_KEY] == "Overview"
+
+    navigate_to(state, "Merchant Ops")
+    assert state[REQUESTED_PAGE_KEY] == "Merchant Ops"
+    apply_pending_navigation(state)
+    assert state[PAGE_KEY] == "Merchant Ops"
+
+    navigate_to(state, "Recovery Lab", order_id="O_SELECTED")
+    apply_pending_navigation(state)
+    assert state[PAGE_KEY] == "Recovery Lab"
+    assert state[INSPECT_ORDER_KEY] == "O_SELECTED"
+    assert selected_order_id(state) == "O_SELECTED"

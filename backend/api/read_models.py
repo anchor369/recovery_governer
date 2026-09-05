@@ -6,7 +6,7 @@ from backend.data_access.recovery_views import (
     get_recovery_metric_records,
     list_recovery_case_records,
 )
-from backend.services.payment_truth import evaluate_order_truth
+from backend.services.payment_truth import evaluate_order_truth, evaluate_payment_statuses
 
 
 DATA_DIR = Path(__file__).resolve().parents[2] / "data"
@@ -107,7 +107,15 @@ def build_order_timeline(order_id):
 
 
 def list_recovery_cases(limit):
-    return list_recovery_case_records(limit)
+    records = list_recovery_case_records(limit)
+    cases = []
+    for record in records:
+        case = dict(record)
+        payment_statuses = case.pop("payment_statuses") or []
+        # The portfolio read model uses the same truth precedence as an order read.
+        case["financial_truth"] = evaluate_payment_statuses(payment_statuses)
+        cases.append(case)
+    return cases
 
 
 def _read_csv(name):

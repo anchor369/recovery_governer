@@ -3,6 +3,13 @@ from backend.services import (
 )
 
 
+def test_payment_status_truth_helper_preserves_authoritative_precedence():
+    assert payment_truth.evaluate_payment_statuses(["FAILED", "CAPTURED"]) == "PAID"
+    assert payment_truth.evaluate_payment_statuses(["FAILED", "AUTHORIZED"]) == "UNCERTAIN"
+    assert payment_truth.evaluate_payment_statuses(["FAILED", "FAILED"]) == "UNPAID"
+    assert payment_truth.evaluate_payment_statuses([]) == "UNPAID"
+
+
 def test_missing_order_returns_order_not_found(
     monkeypatch,
 ):

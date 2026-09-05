@@ -59,10 +59,14 @@ class TimelineItem(BaseModel):
 class RecoveryCaseSummary(BaseModel):
     order_id: str
     recovery_case_id: str
+    amount_minor: int
+    currency: str
+    financial_truth: str
     status: str
     closure_reason: str | None = None
     chosen_action: str | None = None
     execution_status: str | None = None
     outcome_type: str | None = None
+    recovered_amount_minor: int | None = None
     opened_at: datetime
     closed_at: datetime | None = None

@@ -96,6 +96,15 @@ def _current_events_for_preset(preset):
     ]
 
 
+def _customer_signals_for_preset(preset):
+    # The showcase path must remain distinct from the explicit safety presets.
+    if preset == DemoPreset.NO_CONTACT_CONSENT:
+        return False, False
+    if preset == DemoPreset.ACTIVE_CUSTOMER:
+        return True, True
+    return True, False
+
+
 def _build_journey(customer_id, order_id, profile, decision_time):
     customer = get_customer(customer_id)
     order = get_order(order_id)
@@ -216,8 +225,7 @@ def create_demo_scenario(
     suffix = uuid.uuid4().hex[:10]
     customer_id = f"C_DEMO_{suffix}"
     order_id = f"O_DEMO_{suffix}"
-    contact_consent = preset != DemoPreset.NO_CONTACT_CONSENT
-    customer_active = preset == DemoPreset.ACTIVE_CUSTOMER
+    contact_consent, customer_active = _customer_signals_for_preset(preset)
     now = datetime.now(timezone.utc)
 
     customer_age = (

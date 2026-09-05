@@ -133,6 +133,31 @@ def test_demo_scenario_presets(preset, expected_payments):
     assert scenario["journey"]["current_payment_attempts"]
 
 
+def test_two_failures_showcase_is_eligible_and_not_an_active_retry():
+    scenario = create_demo("two_failures")
+
+    assert scenario["metadata"]["contact_consent"] is True
+    assert scenario["metadata"]["runtime_signals"]["customer_active"] is False
+    assert scenario["journey"]["order"]["financial_truth"] == "UNPAID"
+    assert scenario["journey"]["recovery_gate"]["confirmed_failure_count"] == 2
+    assert scenario["journey"]["recovery_gate"]["eligible"] is True
+
+    workflow = run_recovery(scenario)
+    assert workflow.status_code == 200
+    result = workflow.json()
+    assert result["workflow_state"] == "DECIDED"
+    assert result["chosen_action"] == result["decision"]["proposed_action"]
+    assert result["chosen_action"] in {
+        score["action_type"] for score in result["candidate_action_scores"]
+    }
+
+
+def test_active_customer_remains_an_explicit_safety_scenario():
+    scenario = create_demo("active_customer")
+    assert scenario["metadata"]["contact_consent"] is True
+    assert scenario["metadata"]["runtime_signals"]["customer_active"] is True
+
+
 @pytest.mark.parametrize(
     ("profile", "orders", "successes", "failures", "median_amount", "amount_ratio"),
     [
@@ -303,6 +328,24 @@ def test_recovery_case_list_and_metrics_schemas():
     assert body["total_recovery_cases"] >= body["open_cases"]
     assert body["canonical_benchmarks"]
     assert body["canonical_thresholds"]
+
+
+def test_recovery_case_list_exposes_read_only_operations_fields():
+    scenario = create_demo("two_failures")
+    workflow = run_recovery(scenario)
+    assert workflow.status_code == 200
+    before = client.get("/api/metrics").json()["total_recovery_cases"]
+
+    response = client.get("/api/recovery-cases", params={"limit": 500})
+    assert response.status_code == 200
+    case = next(
+        row for row in response.json() if row["order_id"] == scenario["order_id"]
+    )
+    assert case["amount_minor"] == 150_000
+    assert case["currency"] == "INR"
+    assert case["financial_truth"] == "UNPAID"
+    assert "recovered_amount_minor" in case
+    assert client.get("/api/metrics").json()["total_recovery_cases"] == before
 
 
 @pytest.mark.parametrize(

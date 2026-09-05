@@ -83,9 +83,18 @@ def list_recovery_case_records(limit):
         SELECT
             rc.order_id, rc.recovery_case_id, rc.status,
             rc.closure_reason, rc.opened_at, rc.closed_at,
+            o.amount_minor, o.currency,
+            payment_state.payment_statuses,
             rd.proposed_action AS chosen_action,
-            ra.execution_status, ro.outcome_type
+            ra.execution_status, ro.outcome_type,
+            ro.recovered_amount_minor
         FROM recovery_cases rc
+        JOIN orders o ON o.order_id = rc.order_id
+        LEFT JOIN LATERAL (
+            SELECT array_agg(p.status) AS payment_statuses
+            FROM payments p
+            WHERE p.order_id = rc.order_id
+        ) payment_state ON TRUE
         LEFT JOIN LATERAL (
             SELECT * FROM recovery_decisions
             WHERE recovery_case_id = rc.recovery_case_id

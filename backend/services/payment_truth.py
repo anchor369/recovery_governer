@@ -4,6 +4,16 @@ from backend.data_access.payments import (
     get_payment_events_for_order_before_time,
 )
 
+
+def evaluate_payment_statuses(payment_statuses):
+    if "CAPTURED" in payment_statuses:
+        return "PAID"
+
+    if any(status in {"CREATED", "AUTHORIZED"} for status in payment_statuses):
+        return "UNCERTAIN"
+
+    return "UNPAID"
+
 def evaluate_order_truth(order_id):
     order = get_order(order_id)
 
@@ -17,16 +27,7 @@ def evaluate_order_truth(order_id):
         for payment in payments
     ]
 
-    if "CAPTURED" in payment_statuses:
-        return "PAID"
-
-    if any(
-        status in {"CREATED", "AUTHORIZED"}
-        for status in payment_statuses
-    ):
-        return "UNCERTAIN"
-
-    return "UNPAID"
+    return evaluate_payment_statuses(payment_statuses)
 
 def evaluate_order_truth_at_time(
     order_id,

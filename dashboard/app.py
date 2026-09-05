@@ -1,6 +1,12 @@
 import streamlit as st
 
 from dashboard.api_client import RecoveryAPIClient, RecoveryAPIError
+from dashboard.navigation import (
+    PAGE_KEY,
+    PAGES as PAGE_NAMES,
+    apply_pending_navigation,
+    initialize_navigation,
+)
 from dashboard.pages import economics, merchant_ops, overview, recovery_lab, system
 from dashboard.theme import apply_theme
 
@@ -20,6 +26,8 @@ def get_api_client():
 
 
 client = get_api_client()
+initialize_navigation(st.session_state)
+apply_pending_navigation(st.session_state)
 
 with st.sidebar:
     st.markdown("## Recovery Governor")
@@ -27,8 +35,8 @@ with st.sidebar:
     st.divider()
     page = st.radio(
         "Navigation",
-        ["Overview", "Recovery Lab", "Merchant Ops", "Economics & Policy", "System"],
-        index=1,
+        PAGE_NAMES,
+        key=PAGE_KEY,
         label_visibility="collapsed",
     )
     st.divider()
@@ -47,11 +55,11 @@ with st.sidebar:
             st.rerun()
 
 
-PAGES = {
+PAGE_RENDERERS = {
     "Overview": overview.render,
     "Recovery Lab": recovery_lab.render,
     "Merchant Ops": merchant_ops.render,
     "Economics & Policy": economics.render,
     "System": system.render,
 }
-PAGES[page](client)
+PAGE_RENDERERS[page](client)
