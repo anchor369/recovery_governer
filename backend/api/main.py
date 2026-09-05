@@ -1,12 +1,25 @@
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.routes import demo, health, metrics, payments, recovery
+from backend.db import close_connection_pool, open_connection_pool
+
+
+@asynccontextmanager
+async def lifespan(_app):
+    open_connection_pool()
+    try:
+        yield
+    finally:
+        close_connection_pool()
 
 
 app = FastAPI(
     title="Recovery Governor API",
     version="1.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
