@@ -26,6 +26,7 @@ Recovery Governor is a reference implementation of an end-to-end recovery decisi
 - [AI model](#ai-model)
 - [Economic Governor and benchmark evidence](#economic-governor)
 - [Payment-safety invariants](#payment-safety-invariants)
+- [Data model and audit traceability](#data-model-and-audit-traceability)
 - [Product experience](#product-experience)
 - [API](#api)
 - [Quickstart](#quickstart)
@@ -142,6 +143,56 @@ FastAPI provides the application boundary, PostgreSQL stores financial and audit
 
 This direction is enforced in code and audit data: the model can inform a decision, but it cannot promote uncertain evidence to failure, execute an action, or declare revenue recovered.
 
+### Operational decision sequence
+
+The runtime keeps state changes on explicit service and transaction boundaries. In particular, decision persistence, action execution, and recovery attribution are separate operations with independent payment-truth checks.
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant Source as Event Source
+    participant API as FastAPI
+    participant DB as PostgreSQL
+    participant Recovery as Recovery Service
+    participant Model as S-Learner
+    participant Governor as Economic Governor
+    participant Executor as Action Executor
+    participant Outcome as Outcome Service
+
+    Source->>API: Payment event
+    API->>DB: Persist event + update payment state
+    Note over API,DB: One ingestion transaction
+
+    API->>Recovery: Run recovery for order
+    Recovery->>DB: Read truth + eligibility
+    alt Paid or uncertain
+        Recovery-->>API: STOP or WAIT_FOR_TRUTH
+    else Eligible unpaid order
+        Recovery->>DB: Open recovery case
+        Recovery->>Model: Score observable state under each action
+        Model-->>Recovery: Counterfactual probabilities
+        Recovery->>Governor: Probabilities + policy + economics
+        Governor-->>Recovery: Chosen action or NO_ACTION
+        Recovery->>DB: Persist decision + candidate scores
+        Note over Recovery,DB: Candidate audit is atomic
+        Recovery->>DB: Create recovery action
+        Recovery->>Executor: Process chosen action
+        Executor->>DB: Recheck current payment truth
+        alt Still unpaid
+            Executor->>DB: Atomically claim PENDING action
+        else Paid or uncertain
+            Executor->>DB: Mark action BLOCKED
+        end
+    end
+
+    Source->>API: Later CAPTURED event
+    API->>DB: Persist event + materialize PAID
+    API->>Outcome: Attribute recovery request
+    Outcome->>DB: Verify case, action, payment, and CAPTURED event
+    Outcome->>DB: Insert outcome + close case
+    Note over Outcome,DB: Attribution and closure are atomic
+```
+
 ## AI model
 
 The production champion is a pooled **S-Learner**, stored at [`models/s_learner.joblib`](models/s_learner.joblib). It performs treatment-aware supervised prediction of:
@@ -185,6 +236,31 @@ Incremental Utility(a)
 
 If no intervention clears policy constraints and produces positive incremental utility, `NO_ACTION` wins.
 
+### From prediction to governed action
+
+```mermaid
+flowchart LR
+    S[Observable decision state] --> C[Generate structural candidates]
+    C --> A[Score the same state under every action]
+    A --> M[Pooled S-Learner]
+    M --> P[Predicted recovery probabilities]
+
+    P --> E[Expected merchant value]
+    B[NO_ACTION natural-recovery baseline] --> E
+    K[Processing, action, and discount costs] --> E
+
+    E --> U[Incremental utility vs NO_ACTION]
+    G[Deterministic policy guardrails] --> R[Economic Governor]
+    U --> R
+    T[Merchant utility threshold] --> R
+
+    R --> W{Positive value and policy-safe?}
+    W -->|Yes| I[Choose best intervention]
+    W -->|No| N[Choose NO_ACTION]
+```
+
+The prediction layer never selects an action by itself. The Governor compares policy-eligible candidates in merchant-value terms, and `NO_ACTION` remains the fallback when intervention cannot justify its incremental cost.
+
 ### Canonical controlled benchmark
 
 The committed [`data/economic_benchmark_summary.csv`](data/economic_benchmark_summary.csv) reports:
@@ -219,6 +295,44 @@ The canonical threshold evaluation exposes policy modes, not separate ML models:
 
 The threshold is the minimum predicted incremental merchant value required before an intervention may be selected.
 
+### Offline evaluation pipeline
+
+The controlled benchmark is produced separately from the operational database. Synthetic hidden variables generate outcomes for evaluation, but they never enter the production feature state.
+
+```mermaid
+flowchart TD
+    SIM[Synthetic journey simulator]
+
+    subgraph Training[Training path]
+        H[Observed historical journeys]
+        D[Temporal-safe historical dataset]
+        TR[Train pooled S-Learner]
+        ART[Canonical model artifact]
+    end
+
+    subgraph Evaluation[Controlled evaluation path]
+        F[Fixed observable decision states]
+        CF[Repeated independent rollouts per action]
+        TP[Estimated true counterfactual probabilities]
+        MP[Model counterfactual predictions]
+        CM[Probability, uplift, policy, and regret metrics]
+        PE[Governor and policy comparison]
+        BENCH[Canonical benchmark artifacts]
+    end
+
+    SIM --> H --> D --> TR --> ART
+    SIM --> F --> CF --> TP
+    ART --> MP
+    F --> MP
+    TP --> CM
+    MP --> CM
+    TP --> PE
+    MP --> PE
+    PE --> BENCH
+```
+
+This provenance is why benchmark percentages are presented as controlled offline evidence rather than live merchant performance.
+
 ## Payment-safety invariants
 
 Financial truth always outranks prediction:
@@ -236,6 +350,28 @@ Recovery eligibility remains deliberately conservative:
 2+ confirmed failures → may become recovery eligible
 ```
 
+```mermaid
+flowchart TD
+    O[Order payment evidence] --> C{Any CAPTURED payment?}
+    C -->|Yes| PAID[PAID]
+    PAID --> STOP[STOP recovery]
+
+    C -->|No| U{Any CREATED or AUTHORIZED payment?}
+    U -->|Yes| UNCERTAIN[UNCERTAIN]
+    UNCERTAIN --> WAIT[WAIT_FOR_TRUTH]
+
+    U -->|No| UNPAID[UNPAID]
+    UNPAID --> AC{Open recovery case exists?}
+    AC -->|Yes| OPEN[RECOVERY_ALREADY_OPEN]
+    AC -->|No| F{Confirmed failure count}
+    F -->|0| NONE[NO_CONFIRMED_FAILURE]
+    F -->|1| NATURAL[ALLOW_NATURAL_RETRY]
+    F -->|2 or more| ELIGIBLE[MULTIPLE_CONFIRMED_FAILURES]
+    ELIGIBLE --> CASE[Open recovery case]
+```
+
+`WAIT_FOR_TRUTH` is a deterministic workflow state, not an ML action. An existing open case is also rejected before a second case can be created.
+
 The implementation enforces:
 
 - **One active case per order:** PostgreSQL partial unique index `uq_one_active_recovery_case_per_order`.
@@ -248,6 +384,99 @@ The implementation enforces:
 - **Payment-backed attribution:** `RECOVERED` requires relational links to the recovery case, action, payment, and confirmed `CAPTURED` evidence.
 
 Decision does not imply execution. Execution does not imply recovery.
+
+## Data model and audit traceability
+
+PostgreSQL stores both materialized payment state and the evidence needed to reconstruct the recovery lifecycle. The schema keeps financial evidence, decisions, executions, and outcomes relationally linked.
+
+```mermaid
+erDiagram
+    CUSTOMERS ||--o{ ORDERS : places
+    ORDERS ||--o{ PAYMENTS : contains
+    PAYMENTS ||--o{ PAYMENT_EVENTS : records
+
+    ORDERS ||--o{ RECOVERY_CASES : may_open
+    RECOVERY_CASES ||--o{ RECOVERY_DECISIONS : contains
+    RECOVERY_DECISIONS ||--o{ DECISION_ACTION_SCORES : evaluates
+    RECOVERY_DECISIONS ||--o{ RECOVERY_ACTIONS : creates
+
+    RECOVERY_CASES ||--o{ RECOVERY_OUTCOMES : resolves_with
+    RECOVERY_ACTIONS o|--o{ RECOVERY_OUTCOMES : attributed_through
+    PAYMENTS o|--o{ RECOVERY_OUTCOMES : confirmed_by
+
+    CUSTOMERS {
+        varchar customer_id PK
+        boolean contact_consent
+        timestamptz created_at
+    }
+    ORDERS {
+        varchar order_id PK
+        varchar customer_id FK
+        bigint amount_minor
+        varchar currency
+        varchar status
+    }
+    PAYMENTS {
+        varchar payment_id PK
+        varchar order_id FK
+        varchar method
+        varchar status
+        varchar failure_reason
+    }
+    PAYMENT_EVENTS {
+        bigint event_id PK
+        varchar payment_id FK
+        varchar provider_event_id UK
+        varchar event_type
+        timestamptz event_time
+        timestamptz received_at
+    }
+    RECOVERY_CASES {
+        varchar recovery_case_id PK
+        varchar order_id FK
+        varchar status
+        varchar closure_reason
+        timestamptz opened_at
+        timestamptz closed_at
+    }
+    RECOVERY_DECISIONS {
+        varchar decision_id PK
+        varchar recovery_case_id FK
+        varchar model_version
+        varchar proposed_action
+        jsonb feature_snapshot
+    }
+    DECISION_ACTION_SCORES {
+        varchar decision_id PK, FK
+        varchar action_type PK
+        boolean is_eligible
+        float predicted_success_probability
+        bigint expected_incremental_utility_minor
+        bigint expected_merchant_value_minor
+    }
+    RECOVERY_ACTIONS {
+        varchar action_id PK
+        varchar decision_id FK
+        varchar action_type
+        varchar execution_status
+        varchar blocked_reason
+    }
+    RECOVERY_OUTCOMES {
+        varchar outcome_id PK
+        varchar recovery_case_id FK
+        varchar action_id FK
+        varchar payment_id FK
+        varchar outcome_type
+        bigint recovered_amount_minor
+    }
+```
+
+Two constraints are especially important:
+
+- `payment_events.provider_event_id` is unique, supporting idempotent event delivery.
+- `uq_one_active_recovery_case_per_order` is a partial unique index on open cases, preventing concurrent duplicate recovery workflows for one order.
+
+A verified recovery remains traceable from order → case → decision → action → outcome → captured payment → payment event. The canonical schema is versioned in [`database/schema.sql`](database/schema.sql).
 
 ## Product experience
 
