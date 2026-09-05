@@ -30,11 +30,6 @@ from simulator.models import (
     PaymentMethod,
 )
 
-from backend.services.recovery_state import (
-    build_customer_order_features,
-    build_prior_order_summary,
-)
-
 def test_prior_order_summary_respects_payment_truth():
     suffix = uuid.uuid4().hex[:8]
 

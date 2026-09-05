@@ -7,7 +7,6 @@ from simulator.intervention_engine import InterventionEngine
 from simulator.journey_processor import JourneyProcessor
 from simulator.models import (
     ActionType,
-    PaymentMethod,
     PaymentStatus,
     RecoveryAction,
 )

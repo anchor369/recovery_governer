@@ -53,7 +53,7 @@ print(
     "/year",
 )
 print(
-    "Typical Order: ₹",
+    "Typical Order: INR",
     customer.typical_order_value_minor / 100,
 )
 
@@ -63,7 +63,7 @@ print("-------")
 for journey in history:
     print(
         journey.created_at.date(),
-        "₹",
+        "INR",
         round(
             journey.amount_minor / 100,
             2,

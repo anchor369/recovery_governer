@@ -1,8 +1,12 @@
+import logging
 from datetime import datetime
 
 from backend.db import get_connection
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
+
+
+logger = logging.getLogger(__name__)
 
 
 PAYMENT_EVENT_TYPES = {
@@ -303,11 +307,21 @@ def record_payment_event(
                     event_time=event_time,
                     raw_payload=raw_payload,
                 ):
+                    logger.warning(
+                        "Payment event idempotency conflict: provider_event_id=%s payment_id=%s",
+                        provider_event_id,
+                        payment_id,
+                    )
                     raise ConflictingPaymentEventError(
                         "provider_event_id is already bound to "
                         "different payment evidence."
                     )
 
+                logger.debug(
+                    "Duplicate payment event recognized: provider_event_id=%s payment_id=%s",
+                    provider_event_id,
+                    payment_id,
+                )
                 return {
                     "created": False,
                     "duplicate": True,
@@ -319,6 +333,13 @@ def record_payment_event(
                 cursor=cursor,
                 payment_id=payment_id,
                 current_status=payment["status"],
+            )
+
+            logger.info(
+                "Payment event persisted: provider_event_id=%s payment_id=%s status=%s",
+                provider_event_id,
+                payment_id,
+                payment_status,
             )
 
             return {

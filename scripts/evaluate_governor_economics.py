@@ -594,32 +594,32 @@ for policy_name in policy_names:
 
     print(
         "Expected merchant value / failed order:",
-        f"₹{merchant_value / 100:.2f}",
+        f"INR {merchant_value / 100:.2f}",
     )
 
     print(
         "Net incremental value / failed order:",
-        f"₹{incremental_value_minor / 100:.2f}",
+        f"INR {incremental_value_minor / 100:.2f}",
     )
 
     print(
         "Net incremental value / 1,000 failures:",
-        f"₹{incremental_value_minor * 10:.2f}",
+        f"INR {incremental_value_minor * 10:.2f}",
     )
 
     print(
         "Expected discount spend / failed order:",
-        f"₹{discount_spend / 100:.2f}",
+        f"INR {discount_spend / 100:.2f}",
     )
 
     print(
         "Expected action cost / failed order:",
-        f"₹{action_cost / 100:.2f}",
+        f"INR {action_cost / 100:.2f}",
     )
 
     print(
         "Economic regret vs Oracle:",
-        f"₹{regret_minor / 100:.2f}",
+        f"INR {regret_minor / 100:.2f}",
         "per failed order",
     )
 

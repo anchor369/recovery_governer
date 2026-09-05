@@ -135,7 +135,10 @@ def test_exact_duplicate_is_a_successful_no_op(payment_record):
     assert _event_count(event_id) == 1
 
 
-def test_conflicting_duplicate_is_rejected_explicitly(payment_record):
+def test_conflicting_duplicate_is_rejected_explicitly(
+    payment_record,
+    caplog,
+):
     event_id = f"{payment_record['event_prefix']}_CONFLICT"
     event_time = datetime.now(timezone.utc)
 
@@ -161,6 +164,46 @@ def test_conflicting_duplicate_is_rejected_explicitly(payment_record):
 
     assert _event_count(event_id) == 1
     assert _payment_status(payment_record["payment_id"]) == "AUTHORIZED"
+    assert "Payment event idempotency conflict" in caplog.text
+
+
+def test_json_payload_key_order_is_an_idempotent_duplicate(payment_record):
+    event_id = f"{payment_record['event_prefix']}_JSON_ORDER"
+    event_time = datetime.now(timezone.utc)
+
+    first = record_payment_event(
+        payment_id=payment_record["payment_id"],
+        provider_event_id=event_id,
+        event_type="FAILED",
+        event_time=event_time,
+        raw_payload={"provider": "test", "details": {"code": 1, "retry": False}},
+    )
+    duplicate = record_payment_event(
+        payment_id=payment_record["payment_id"],
+        provider_event_id=event_id,
+        event_type="FAILED",
+        event_time=event_time,
+        raw_payload={"details": {"retry": False, "code": 1}, "provider": "test"},
+    )
+
+    assert first["created"] is True
+    assert duplicate["duplicate"] is True
+    assert duplicate["event"]["event_id"] == first["event"]["event_id"]
+    assert _event_count(event_id) == 1
+
+
+def test_unknown_payment_rejects_event_without_persisting(payment_record):
+    event_id = f"{payment_record['event_prefix']}_UNKNOWN_PAYMENT"
+
+    with pytest.raises(ValueError, match="Payment does not exist"):
+        record_payment_event(
+            payment_id=f"P_MISSING_{uuid.uuid4().hex[:10]}",
+            provider_event_id=event_id,
+            event_type="FAILED",
+            event_time=datetime.now(timezone.utc),
+        )
+
+    assert _event_count(event_id) == 0
 
 
 def test_status_failure_rolls_back_event_insert(payment_record, monkeypatch):
@@ -245,6 +288,26 @@ def test_chronological_and_out_of_order_progression(payment_record):
     assert _payment_status(payment_record["payment_id"]) == "FAILED"
 
 
+def test_equal_event_times_use_delivery_order(payment_record):
+    event_time = datetime.now(timezone.utc)
+
+    record_payment_event(
+        payment_id=payment_record["payment_id"],
+        provider_event_id=f"{payment_record['event_prefix']}_EQUAL_AUTH",
+        event_type="AUTHORIZED",
+        event_time=event_time,
+    )
+    result = record_payment_event(
+        payment_id=payment_record["payment_id"],
+        provider_event_id=f"{payment_record['event_prefix']}_EQUAL_FAILED",
+        event_type="FAILED",
+        event_time=event_time,
+    )
+
+    assert result["payment_status"] == "FAILED"
+    assert _payment_status(payment_record["payment_id"]) == "FAILED"
+
+
 def test_historical_truth_still_uses_both_strict_cutoffs(payment_record):
     now = datetime.now(timezone.utc)
     record_payment_event(
@@ -264,10 +327,35 @@ def test_historical_truth_still_uses_both_strict_cutoffs(payment_record):
     ) == "UNPAID"
 
 
+def test_historical_truth_excludes_events_at_each_exact_cutoff(payment_record):
+    event_time = datetime.now(timezone.utc) - timedelta(minutes=1)
+    result = record_payment_event(
+        payment_id=payment_record["payment_id"],
+        provider_event_id=f"{payment_record['event_prefix']}_EXACT_CUTOFF",
+        event_type="FAILED",
+        event_time=event_time,
+    )
+    received_at = result["event"]["received_at"]
+
+    assert evaluate_order_truth_at_time(
+        order_id=payment_record["order_id"],
+        before_time=event_time,
+    ) == "UNCERTAIN"
+    assert evaluate_order_truth_at_time(
+        order_id=payment_record["order_id"],
+        before_time=received_at,
+    ) == "UNCERTAIN"
+    assert evaluate_order_truth_at_time(
+        order_id=payment_record["order_id"],
+        before_time=received_at + timedelta(microseconds=1),
+    ) == "UNPAID"
+
+
 @pytest.mark.parametrize(
     ("provider_event_id", "event_type", "event_time"),
     [
         (None, "FAILED", datetime.now(timezone.utc)),
+        ("   ", "FAILED", datetime.now(timezone.utc)),
         ("EVENT", "UNKNOWN", datetime.now(timezone.utc)),
         ("EVENT", "FAILED", datetime.now()),
     ],

@@ -38,33 +38,46 @@ def test_nudge_label():
     )
 
 
-def test_switch_method_label():
+@pytest.mark.parametrize(
+    ("method", "expected"),
+    [
+        (PaymentMethod.UPI, "SWITCH_UPI"),
+        (PaymentMethod.CREDIT_CARD, "SWITCH_CREDIT_CARD"),
+        (PaymentMethod.DEBIT_CARD, "SWITCH_DEBIT_CARD"),
+        (PaymentMethod.NETBANKING, "SWITCH_NETBANKING"),
+    ],
+)
+def test_switch_method_label(method, expected):
     action = RecoveryAction(
         action_type=(
             ActionType.SWITCH_METHOD
         ),
         target_method=(
-            PaymentMethod.UPI
+            method
         ),
     )
 
     assert (
         action_to_label(action)
-        == "SWITCH_UPI"
+        == expected
     )
 
 
-def test_offer_label():
+@pytest.mark.parametrize(
+    ("discount", "expected"),
+    [(5.0, "OFFER_5"), (10.0, "OFFER_10")],
+)
+def test_offer_label(discount, expected):
     action = RecoveryAction(
         action_type=(
             ActionType.APPROVED_OFFER
         ),
-        discount_percent=5.0,
+        discount_percent=discount,
     )
 
     assert (
         action_to_label(action)
-        == "OFFER_5"
+        == expected
     )
 
 
@@ -105,6 +118,10 @@ def test_offer_requires_discount():
             "SWITCH_CREDIT_CARD",
             ("SWITCH_METHOD", "CREDIT_CARD", 0.0),
         ),
+        ("SWITCH_UPI", ("SWITCH_METHOD", "UPI", 0.0)),
+        ("SWITCH_DEBIT_CARD", ("SWITCH_METHOD", "DEBIT_CARD", 0.0)),
+        ("SWITCH_NETBANKING", ("SWITCH_METHOD", "NETBANKING", 0.0)),
+        ("OFFER_5", ("APPROVED_OFFER", "NONE", 5.0)),
         (
             "OFFER_10",
             ("APPROVED_OFFER", "NONE", 10.0),

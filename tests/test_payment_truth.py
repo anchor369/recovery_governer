@@ -87,6 +87,23 @@ def test_unresolved_payment_means_uncertain(
     assert result == "UNCERTAIN"
 
 
+def test_existing_order_without_payments_means_unpaid(
+    monkeypatch,
+):
+    monkeypatch.setattr(
+        payment_truth,
+        "get_order",
+        lambda order_id: {"order_id": order_id},
+    )
+    monkeypatch.setattr(
+        payment_truth,
+        "get_payments_for_order",
+        lambda order_id: [],
+    )
+
+    assert payment_truth.evaluate_order_truth("O_TEST") == "UNPAID"
+
+
 def test_all_failed_payments_mean_unpaid(
     monkeypatch,
 ):

@@ -277,3 +277,76 @@ def test_policy_check_explains_offer_cap():
         check.reason
         == "MERCHANT_OFFER_CAP_EXCEEDED"
     )
+
+
+def test_policy_check_blocks_nudge_for_active_customer():
+    state = build_state(active=True)
+    governor = RecoveryGovernor(
+        learner=StubLearner({"NO_ACTION": 0.60}),
+        economics=MerchantEconomics(),
+    )
+
+    check = governor.check_action_policy(
+        state=state,
+        action=RecoveryAction(action_type=ActionType.NUDGE),
+    )
+
+    assert check.allowed is False
+    assert check.reason == "CUSTOMER_STILL_ACTIVE"
+
+
+def test_policy_check_blocks_actions_at_maximum_attempts():
+    state = build_state()
+    state.attempt_count = 6
+    governor = RecoveryGovernor(
+        learner=StubLearner({"NO_ACTION": 0.60}),
+        economics=MerchantEconomics(),
+        max_payment_attempts=6,
+    )
+
+    check = governor.check_action_policy(
+        state=state,
+        action=RecoveryAction(action_type=ActionType.NUDGE),
+    )
+
+    assert check.allowed is False
+    assert check.reason == "MAX_PAYMENT_ATTEMPTS_REACHED"
+
+
+def test_policy_check_blocks_switch_to_current_method():
+    state = build_state()
+    governor = RecoveryGovernor(
+        learner=StubLearner({"NO_ACTION": 0.60}),
+        economics=MerchantEconomics(),
+    )
+
+    check = governor.check_action_policy(
+        state=state,
+        action=RecoveryAction(
+            action_type=ActionType.SWITCH_METHOD,
+            target_method=PaymentMethod.UPI,
+        ),
+    )
+
+    assert check.allowed is False
+    assert check.reason == "TARGET_EQUALS_CURRENT_METHOD"
+
+
+def test_policy_check_blocks_unavailable_switch_target():
+    state = build_state()
+    state.available_debit_card = False
+    governor = RecoveryGovernor(
+        learner=StubLearner({"NO_ACTION": 0.60}),
+        economics=MerchantEconomics(),
+    )
+
+    check = governor.check_action_policy(
+        state=state,
+        action=RecoveryAction(
+            action_type=ActionType.SWITCH_METHOD,
+            target_method=PaymentMethod.DEBIT_CARD,
+        ),
+    )
+
+    assert check.allowed is False
+    assert check.reason == "TARGET_METHOD_UNAVAILABLE"

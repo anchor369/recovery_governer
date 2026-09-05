@@ -209,3 +209,22 @@ def test_blocked_action_cannot_claim_recovery(
             action_id="A_TEST",
             payment_id="P_TEST",
         )
+
+
+def test_already_closed_case_is_rejected(monkeypatch):
+    context = build_context(
+        recovery_case_status="CLOSED",
+        closed_at=datetime.now(timezone.utc),
+    )
+    monkeypatch.setattr(
+        recovery_outcome,
+        "get_recovery_outcome_context",
+        lambda **kwargs: context,
+    )
+
+    with pytest.raises(ValueError, match="already closed"):
+        recovery_outcome.record_recovered_payment(
+            recovery_case_id="RC_TEST",
+            action_id="A_TEST",
+            payment_id="P_TEST",
+        )

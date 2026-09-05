@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import (
     datetime,
@@ -8,6 +9,9 @@ from backend.data_access.recovery import (
     create_recovered_outcome_and_close_case,
     get_recovery_outcome_context,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def record_recovered_payment(
@@ -107,7 +111,7 @@ def record_recovered_payment(
         + uuid.uuid4().hex[:12]
     )
 
-    return (
+    result = (
         create_recovered_outcome_and_close_case(
             outcome_id=outcome_id,
             recovery_case_id=(
@@ -135,3 +139,12 @@ def record_recovered_payment(
             ),
         )
     )
+
+    logger.info(
+        "Verified recovery persisted and case closed: recovery_case_id=%s action_id=%s payment_id=%s",
+        recovery_case_id,
+        action_id,
+        payment_id,
+    )
+
+    return result

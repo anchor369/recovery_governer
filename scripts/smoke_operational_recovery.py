@@ -443,14 +443,14 @@ else:
         print(
             "  Expected merchant value:",
             (
-                f"₹{rupees(score.expected_value_minor):.2f}"
+                f"INR {rupees(score.expected_value_minor):.2f}"
             ),
         )
 
         print(
             "  Incremental utility:",
             (
-                f"₹{rupees(score.incremental_utility_minor):+.2f}"
+                f"INR {rupees(score.incremental_utility_minor):+.2f}"
             ),
         )
 
@@ -702,7 +702,7 @@ else:
         print(
             "Recovered amount:",
             (
-                f"₹{rupees(
+                f"INR {rupees(
                     outcome_result[
                         'outcome'
                     ][
@@ -778,7 +778,7 @@ else:
         )
 
         print(
-            "    ↓"
+            "    |"
         )
 
         print(
@@ -786,7 +786,7 @@ else:
         )
 
         print(
-            "    ↓"
+            "    |"
         )
 
         print(
@@ -794,7 +794,7 @@ else:
         )
 
         print(
-            "    ↓"
+            "    |"
         )
 
         print(
@@ -804,7 +804,7 @@ else:
         )
 
         print(
-            "    ↓"
+            "    |"
         )
 
         print(
@@ -812,7 +812,7 @@ else:
         )
 
         print(
-            "    ↓"
+            "    |"
         )
 
         print(
@@ -820,7 +820,7 @@ else:
         )
 
         print(
-            "    ↓"
+            "    |"
         )
 
         print(
@@ -828,7 +828,7 @@ else:
         )
 
         print(
-            "    ↓"
+            "    |"
         )
 
         print(

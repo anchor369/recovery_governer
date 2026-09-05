@@ -1,3 +1,4 @@
+import logging
 import uuid
 from dataclasses import (
     dataclass,
@@ -20,6 +21,9 @@ from backend.services.recovery_execution import (
     create_pending_recovery_action,
     execute_recovery_action,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -135,6 +139,12 @@ def run_recovery_workflow(
         case_result["case"]
     )
 
+    logger.info(
+        "Recovery case opened: recovery_case_id=%s order_id=%s",
+        recovery_case["recovery_case_id"],
+        order_id,
+    )
+
     failure_reason = "DECISION_FAILED"
 
     try:
@@ -200,6 +210,13 @@ def run_recovery_workflow(
             )
         )
 
+        logger.info(
+            "Recovery decision completed: recovery_case_id=%s decision_id=%s action_id=%s",
+            recovery_case["recovery_case_id"],
+            decision_id,
+            pending_action["action_id"],
+        )
+
     except Exception as original_error:
         try:
             close_recovery_case_for_workflow_failure(
@@ -211,12 +228,22 @@ def run_recovery_workflow(
                 closure_reason=failure_reason,
             )
         except Exception as persistence_error:
+            logger.exception(
+                "Recovery workflow failure could not be persisted: recovery_case_id=%s stage=%s",
+                recovery_case["recovery_case_id"],
+                failure_reason,
+            )
             original_error.add_note(
                 "Recovery workflow failure-state persistence "
                 f"also failed: {persistence_error}"
             )
             raise original_error from persistence_error
 
+        logger.exception(
+            "Recovery workflow failed and case was closed: recovery_case_id=%s stage=%s",
+            recovery_case["recovery_case_id"],
+            failure_reason,
+        )
         raise
 
     executed_action = (

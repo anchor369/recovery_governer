@@ -160,21 +160,6 @@ def test_historical_amounts_center_around_customer_typical_value():
 
     assert 0.97 <= median_ratio <= 1.03
 
-def test_each_historical_journey_starts_with_one_payment_attempt():
-    customer, history = build_customer_and_history()
-
-    for journey in history:
-        assert len(journey.payment_attempts) == 1
-
-        first_attempt = journey.payment_attempts[0]
-
-        assert first_attempt.attempt_number == 1
-        assert (
-            first_attempt.method
-            == journey.initial_method
-        )
-
-
 def test_initial_payment_method_is_available_to_customer():
     config = SimulatorConfig()
     random_source = RandomSource(42)

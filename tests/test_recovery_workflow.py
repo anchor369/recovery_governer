@@ -473,6 +473,7 @@ def test_model_decision_failure_closes_case_and_propagates(
 
 def test_audit_failure_closes_case_and_does_not_create_action(
     monkeypatch,
+    caplog,
 ):
     configure_open_case(monkeypatch)
     closures = capture_failure_closure(monkeypatch)
@@ -505,6 +506,8 @@ def test_audit_failure_closes_case_and_does_not_create_action(
 
     assert raised.value is original_error
     assert closures == [("RC_TEST", "AUDIT_FAILED")]
+    assert "Recovery workflow failed and case was closed" in caplog.text
+    assert "stage=AUDIT_FAILED" in caplog.text
 
 
 def test_action_creation_failure_preserves_audit_and_closes_case(

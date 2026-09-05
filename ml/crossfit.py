@@ -5,12 +5,17 @@ Each historical row receives predictions from a model that did not
 train on that row or on other rows from the same customer.
 """
 
+import logging
+
 import numpy as np
 import pandas as pd
 
 from sklearn.model_selection import GroupKFold
 
 from ml.s_learner import PooledSLearner
+
+
+logger = logging.getLogger(__name__)
 
 
 def generate_cross_fitted_predictions(
@@ -58,9 +63,10 @@ def generate_cross_fitted_predictions(
         start=1,
     ):
 
-        print(
-            f"Cross-fitting fold "
-            f"{fold_number}/{n_splits}"
+        logger.debug(
+            "Cross-fitting fold %s/%s",
+            fold_number,
+            n_splits,
         )
 
         # Data the temporary model IS allowed to learn from.

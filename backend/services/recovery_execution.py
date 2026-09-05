@@ -1,3 +1,4 @@
+import logging
 import uuid
 from datetime import (
     datetime,
@@ -20,6 +21,9 @@ from simulator.models import (
 from simulator.action_codec import (
     action_to_label,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 def create_pending_recovery_action(
@@ -97,9 +101,18 @@ def execute_recovery_action(
 
     # NO_ACTION reaches here as NOT_REQUIRED.
     if status == "NOT_REQUIRED":
+        logger.debug(
+            "Recovery action requires no execution: action_id=%s",
+            action["action_id"],
+        )
         return action
 
     if status in {"EXECUTED", "BLOCKED"}:
+        logger.debug(
+            "Recovery action already processed: action_id=%s status=%s",
+            action["action_id"],
+            status,
+        )
         return {
             **action,
             "execution_result": "ALREADY_PROCESSED",
@@ -160,8 +173,26 @@ def execute_recovery_action(
             if execution_status == "EXECUTED"
             else "BLOCKED_BY_PAYMENT_TRUTH"
         )
+        if execution_status == "EXECUTED":
+            logger.info(
+                "Recovery action executed: action_id=%s order_id=%s",
+                action["action_id"],
+                order_id,
+            )
+        else:
+            logger.info(
+                "Recovery action blocked by payment truth: action_id=%s order_id=%s reason=%s",
+                action["action_id"],
+                order_id,
+                blocked_reason,
+            )
     else:
         execution_result = "ALREADY_PROCESSED"
+        logger.debug(
+            "Recovery action transition lost race: action_id=%s requested_status=%s",
+            action["action_id"],
+            execution_status,
+        )
 
     return {
         **transition["action"],
